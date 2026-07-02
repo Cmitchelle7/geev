@@ -1,5 +1,7 @@
 use crate::profile::ProfileContract;
-use crate::types::{DataKey, Error, Giveaway, GiveawayStatus, ParticipantVerification, SelectionMethod};
+use crate::types::{
+    DataKey, Error, Giveaway, GiveawayStatus, ParticipantVerification, SelectionMethod,
+};
 use crate::utils::with_reentrancy_guard;
 use soroban_sdk::{
     contract, contractevent, contractimpl, panic_with_error, token, Address, Env, String, Vec,
@@ -428,14 +430,18 @@ impl GiveawayContract {
     fn validate_manual_winners(env: &Env, giveaway_id: u64, winners: &Vec<Address>) {
         for winner in winners.iter() {
             let has_entered_key = DataKey::HasEntered(giveaway_id, winner.clone());
-            let has_entered: bool = env.storage().persistent().get(&has_entered_key).unwrap_or(false);
+            let has_entered: bool = env
+                .storage()
+                .persistent()
+                .get(&has_entered_key)
+                .unwrap_or(false);
             if !has_entered {
                 panic_with_error!(env, Error::InvalidIndex);
             }
         }
         // Check for duplicates
         for i in 0..winners.len() {
-            for j in i+1..winners.len() {
+            for j in i + 1..winners.len() {
                 if winners.get_unchecked(i) == winners.get_unchecked(j) {
                     panic_with_error!(env, Error::InvalidIndex);
                 }
@@ -444,7 +450,12 @@ impl GiveawayContract {
     }
 
     // Helper function to select winners by merit (reputation)
-    fn select_merit_winners(env: &Env, giveaway_id: u64, winner_count: u32, participant_count: u32) -> Vec<Address> {
+    fn select_merit_winners(
+        env: &Env,
+        giveaway_id: u64,
+        winner_count: u32,
+        participant_count: u32,
+    ) -> Vec<Address> {
         let mut participants_with_reputation = Vec::new(env);
         for i in 0..participant_count {
             let participant_key = DataKey::ParticipantIndex(giveaway_id, i);
@@ -485,7 +496,12 @@ impl GiveawayContract {
     }
 
     // Helper function to finalize winners and emit events
-    fn finalize_winners(env: &Env, giveaway_key: &DataKey, mut giveaway: Giveaway, winners: Vec<Address>) -> Address {
+    fn finalize_winners(
+        env: &Env,
+        giveaway_key: &DataKey,
+        mut giveaway: Giveaway,
+        winners: Vec<Address>,
+    ) -> Address {
         // Emit winner events
         let fee_key = DataKey::Fee;
         let fee_bps: u32 = env.storage().instance().get(&fee_key).unwrap_or(100);
@@ -502,7 +518,7 @@ impl GiveawayContract {
         let base_prize = net_prize
             .checked_div(winner_count)
             .unwrap_or_else(|| panic_with_error!(env, Error::ArithmeticOverflow));
-        
+
         for (index, winner) in winners.iter().enumerate() {
             let prize_amount = if index == 0 {
                 net_prize
@@ -519,24 +535,32 @@ impl GiveawayContract {
                 winner: winner.clone(),
                 giveaway_id: giveaway.id,
                 prize_amount,
-            }.publish(env);
+            }
+            .publish(env);
         }
 
         giveaway.winners = winners.clone();
         giveaway.status = GiveawayStatus::Claimable;
         env.storage().persistent().set(giveaway_key, &giveaway);
-        
-        winners.first().unwrap_or_else(|| panic_with_error!(env, Error::NoParticipants))
+
+        winners
+            .first()
+            .unwrap_or_else(|| panic_with_error!(env, Error::NoParticipants))
     }
 
     /// Finalize a giveaway with manually selected winners
-    /// 
+    ///
     /// # Arguments
     /// * `env` - The contract environment
     /// * `caller` - The address calling this function (must be creator or admin)
     /// * `giveaway_id` - The ID of the giveaway to finalize
     /// * `winners` - The list of winner addresses
-    pub fn finalize_manual_winners(env: Env, caller: Address, giveaway_id: u64, winners: Vec<Address>) -> Address {
+    pub fn finalize_manual_winners(
+        env: Env,
+        caller: Address,
+        giveaway_id: u64,
+        winners: Vec<Address>,
+    ) -> Address {
         caller.require_auth();
 
         let giveaway_key = DataKey::Giveaway(giveaway_id);
@@ -549,7 +573,7 @@ impl GiveawayContract {
         // Validate
         ensure_creator_or_admin(&env, &caller, &giveaway);
         ensure_ready_for_selection(&env, &giveaway);
-        
+
         if giveaway.selection_method != SelectionMethod::Manual {
             panic_with_error!(&env, Error::InvalidStatus);
         }
@@ -564,7 +588,7 @@ impl GiveawayContract {
     }
 
     /// Finalize a giveaway with merit-based selected winners (by reputation)
-    /// 
+    ///
     /// # Arguments
     /// * `env` - The contract environment
     /// * `caller` - The address calling this function (must be creator or admin)
@@ -582,12 +606,17 @@ impl GiveawayContract {
         // Validate
         ensure_creator_or_admin(&env, &caller, &giveaway);
         ensure_ready_for_selection(&env, &giveaway);
-        
+
         if giveaway.selection_method != SelectionMethod::Merit {
             panic_with_error!(&env, Error::InvalidStatus);
         }
 
-        let winners = select_merit_winners(&env, giveaway_id, giveaway.winner_count, giveaway.participant_count);
+        let winners = select_merit_winners(
+            &env,
+            giveaway_id,
+            giveaway.winner_count,
+            giveaway.participant_count,
+        );
         finalize_winners(&env, &giveaway_key, giveaway, winners)
     }
 }

@@ -1999,7 +1999,11 @@ fn test_manual_winner_selection() {
     assert!(winner == participant2 || winner == participant3);
 
     let stored_winners: Vec<Address> = env.as_contract(&contract_id, || {
-        let g: Giveaway = env.storage().persistent().get(&DataKey::Giveaway(giveaway_id)).unwrap();
+        let g: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap();
         g.winners
     });
 
@@ -2077,9 +2081,15 @@ fn test_merit_winner_selection() {
         env.storage()
             .instance()
             .set(&DataKey::AllowedToken(mock_token.clone()), &true);
-        env.storage().persistent().set(&DataKey::Reputation(participant1.clone()), &10u64);
-        env.storage().persistent().set(&DataKey::Reputation(participant2.clone()), &50u64);
-        env.storage().persistent().set(&DataKey::Reputation(participant3.clone()), &30u64);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Reputation(participant1.clone()), &10u64);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Reputation(participant2.clone()), &50u64);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Reputation(participant3.clone()), &30u64);
     });
 
     let giveaway_id = client.create_giveaway_with_selection(
@@ -2103,7 +2113,11 @@ fn test_merit_winner_selection() {
     assert_eq!(winner, participant2);
 
     let stored_winners: Vec<Address> = env.as_contract(&contract_id, || {
-        let g: Giveaway = env.storage().persistent().get(&DataKey::Giveaway(giveaway_id)).unwrap();
+        let g: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap();
         g.winners
     });
 
