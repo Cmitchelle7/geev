@@ -31,8 +31,8 @@ pub struct GiveawayWinnerSelected {
     prize_amount: i128,
 }
 
-#[allow(clippy::too_many_arguments)]
 #[contractimpl]
+#[allow(clippy::too_many_arguments)]
 impl GiveawayContract {
     #[allow(clippy::too_many_arguments)]
     pub fn create_giveaway(
