@@ -1593,7 +1593,7 @@ fn test_flag_counts_are_independent_per_id() {
 // ── auto-suspension tests ─────────────────────────────────────────────────────
 
 use crate::governance::FLAG_THRESHOLD;
-use crate::types::GiveawayStatus;
+use crate::types::{GiveawayStatus, SelectionMethod};
 
 /// Seed a minimal active Giveaway directly into contract storage.
 fn seed_active_giveaway(env: &Env, contract_id: &Address, giveaway_id: u64, token: &Address) {
@@ -1611,6 +1611,7 @@ fn seed_active_giveaway(env: &Env, contract_id: &Address, giveaway_id: u64, toke
         winners: Vec::new(env),
         verification_type: 0,
         min_reputation: 0,
+        selection_method: SelectionMethod::Random,
     };
     env.as_contract(contract_id, || {
         env.storage()
@@ -1782,6 +1783,7 @@ fn test_enter_suspended_giveaway_fails() {
                 winners: Vec::new(&env),
                 verification_type: 0,
                 min_reputation: 0,
+                selection_method: SelectionMethod::Random,
             },
         );
     });
@@ -1946,514 +1948,269 @@ fn test_reputation_accumulates_across_giveaways() {
     });
 }
 
-// TODO: The following dispute resolution tests require contract updates:
-// 1. Add HelpRequestStatus::Disputed, ResolvedRelease, ResolvedRefund to types.rs
-// 2. Add GiveawayStatus::Disputed, ResolvedRelease, ResolvedRefund to types.rs
-// 3. Add get_request(), dispute_request(), resolve_dispute() to mutual_aid.rs
-// 4. Add dispute_giveaway(), resolve_giveaway_dispute() to giveaway.rs
-// Once those are implemented, uncomment the tests below.
+#[test]
+fn test_manual_winner_selection() {
+    let env = Env::default();
+    env.mock_all_auths();
 
-// // ─── Dispute Resolution Tests ─────────────────────────────────────────────
-//
-// #[test]
-// fn test_dispute_help_request_by_creator() {
-//     let env = Env::default();
-//     env.mock_all_auths();
-//
-//     let contract_id = env.register(MutualAidContract, ());
-//     let client = MutualAidContractClient::new(&env, &contract_id);
-//
-//     let token_admin = Address::generate(&env);
-//     let mock_token = env
-//         .register_stellar_asset_contract_v2(token_admin.clone())
-//         .address();
-//     let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
-//
-//     let creator = Address::generate(&env);
-//     let donor = Address::generate(&env);
-//     token_admin_client.mint(&donor, &500);
-//
-//     let request_id = 1u64;
-//     let goal = 1000i128;
-//
-//     client.post_help_request(&creator, &request_id, &goal, &mock_token);
-//     client.donate(&donor, &request_id, &500);
-//     client.dispute_request(&request_id, &creator);
-//
-//     let request = client.get_request(&request_id);
-//     assert_eq!(request.status, HelpRequestStatus::Disputed);
-// }
-//
-// #[test]
-// fn test_dispute_help_request_by_donor() {
-//     let env = Env::default();
-//     env.mock_all_auths();
-//
-//     let contract_id = env.register(MutualAidContract, ());
-//     let client = MutualAidContractClient::new(&env, &contract_id);
-//
-//     let token_admin = Address::generate(&env);
-//     let mock_token = env
-//         .register_stellar_asset_contract_v2(token_admin.clone())
-//         .address();
-//     let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
-//
-//     let creator = Address::generate(&env);
-//     let donor = Address::generate(&env);
-//     token_admin_client.mint(&donor, &500);
-//
-//     let request_id = 1u64;
-//     let goal = 1000i128;
-//
-//     client.post_help_request(&creator, &request_id, &goal, &mock_token);
-//     client.donate(&donor, &request_id, &500);
-//     client.dispute_request(&request_id, &donor);
-//
-//     let request = client.get_request(&request_id);
-//     assert_eq!(request.status, HelpRequestStatus::Disputed);
-// }
-//
-// #[test]
-// #[should_panic(expected = "InvalidStatus")]
-// fn test_donate_blocked_while_disputed() {
-//     let env = Env::default();
-//     env.mock_all_auths();
-//
-//     let contract_id = env.register(MutualAidContract, ());
-//     let client = MutualAidContractClient::new(&env, &contract_id);
-//
-//     let token_admin = Address::generate(&env);
-//     let mock_token = env
-//         .register_stellar_asset_contract_v2(token_admin.clone())
-//         .address();
-//     let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
-//
-//     let creator = Address::generate(&env);
-//     let donor = Address::generate(&env);
-//     let donor2 = Address::generate(&env);
-//     token_admin_client.mint(&donor, &500);
-//     token_admin_client.mint(&donor2, &500);
-//
-//     let request_id = 1u64;
-//     let goal = 1000i128;
-//
-//     client.post_help_request(&creator, &request_id, &goal, &mock_token);
-//     client.donate(&donor, &request_id, &500);
-//     client.dispute_request(&request_id, &creator);
-//
-//     // Should panic — donations blocked while disputed
-//     client.donate(&donor2, &request_id, &500);
-// }
-//
-// #[test]
-// #[should_panic(expected = "InvalidStatus")]
-// fn test_cancel_blocked_while_disputed() {
-//     let env = Env::default();
-//     env.mock_all_auths();
-//
-//     let contract_id = env.register(MutualAidContract, ());
-//     let client = MutualAidContractClient::new(&env, &contract_id);
-//
-//     let token_admin = Address::generate(&env);
-//     let mock_token = env
-//         .register_stellar_asset_contract_v2(token_admin.clone())
-//         .address();
-//
-//     let creator = Address::generate(&env);
-//     let request_id = 1u64;
-//     let goal = 1000i128;
-//
-//     client.post_help_request(&creator, &request_id, &goal, &mock_token);
-//     client.dispute_request(&request_id, &creator);
-//
-//     // Should panic — cancel blocked while disputed
-//     client.cancel_request(&request_id, &creator);
-// }
-//
-// #[test]
-// #[should_panic(expected = "InvalidStatus")]
-// fn test_claim_refund_blocked_while_disputed() {
-//     let env = Env::default();
-//     env.mock_all_auths();
-//
-//     let contract_id = env.register(MutualAidContract, ());
-//     let client = MutualAidContractClient::new(&env, &contract_id);
-//
-//     let token_admin = Address::generate(&env);
-//     let mock_token = env
-//         .register_stellar_asset_contract_v2(token_admin.clone())
-//         .address();
-//     let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
-//
-//     let creator = Address::generate(&env);
-//     let donor = Address::generate(&env);
-//     token_admin_client.mint(&donor, &500);
-//
-//     let request_id = 1u64;
-//     let goal = 1000i128;
-//
-//     client.post_help_request(&creator, &request_id, &goal, &mock_token);
-//     client.donate(&donor, &request_id, &500);
-//     client.dispute_request(&request_id, &creator);
-//
-//     // Should panic — refund blocked while disputed
-//     client.claim_refund(&donor, &request_id);
-// }
-//
-// #[test]
-// fn test_admin_resolves_dispute_release_funds() {
-//     let env = Env::default();
-//     env.mock_all_auths();
-//
-//     let contract_id = env.register(MutualAidContract, ());
-//     let client = MutualAidContractClient::new(&env, &contract_id);
-//
-//     let token_admin = Address::generate(&env);
-//     let mock_token = env
-//         .register_stellar_asset_contract_v2(token_admin.clone())
-//         .address();
-//     let token_client = token::Client::new(&env, &mock_token);
-//     let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
-//
-//     let admin = Address::generate(&env);
-//     let creator = Address::generate(&env);
-//     let donor = Address::generate(&env);
-//     token_admin_client.mint(&donor, &500);
-//
-//     env.as_contract(&contract_id, || {
-//         env.storage().instance().set(&DataKey::Admin, &admin);
-//     });
-//
-//     let request_id = 1u64;
-//     let goal = 1000i128;
-//
-//     client.post_help_request(&creator, &request_id, &goal, &mock_token);
-//     client.donate(&donor, &request_id, &500);
-//     client.dispute_request(&request_id, &creator);
-//
-//     // Admin resolves — release funds to creator
-//     client.resolve_dispute(&request_id, &true);
-//
-//     let request = client.get_request(&request_id);
-//     assert_eq!(request.status, HelpRequestStatus::ResolvedRelease);
-//     assert_eq!(token_client.balance(&creator), 500);
-// }
-//
-// #[test]
-// fn test_admin_resolves_dispute_refund() {
-//     let env = Env::default();
-//     env.mock_all_auths();
-//
-//     let contract_id = env.register(MutualAidContract, ());
-//     let client = MutualAidContractClient::new(&env, &contract_id);
-//
-//     let token_admin = Address::generate(&env);
-//     let mock_token = env
-//         .register_stellar_asset_contract_v2(token_admin.clone())
-//         .address();
-//     let token_client = token::Client::new(&env, &mock_token);
-//     let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
-//
-//     let admin = Address::generate(&env);
-//     let creator = Address::generate(&env);
-//     let donor = Address::generate(&env);
-//     token_admin_client.mint(&donor, &500);
-//
-//     env.as_contract(&contract_id, || {
-//         env.storage().instance().set(&DataKey::Admin, &admin);
-//     });
-//
-//     let request_id = 1u64;
-//     let goal = 1000i128;
-//
-//     client.post_help_request(&creator, &request_id, &goal, &mock_token);
-//     client.donate(&donor, &request_id, &500);
-//     client.dispute_request(&request_id, &creator);
-//
-//     // Admin resolves — enable refunds
-//     client.resolve_dispute(&request_id, &false);
-//
-//     let request = client.get_request(&request_id);
-//     assert_eq!(request.status, HelpRequestStatus::ResolvedRefund);
-//
-//     client.claim_refund(&donor, &request_id);
-//     assert_eq!(token_client.balance(&donor), 500);
-// }
-//
-// #[test]
-// #[should_panic(expected = "NotAdmin")]
-// fn test_non_admin_cannot_resolve_dispute() {
-//     let env = Env::default();
-//     env.mock_all_auths();
-//
-//     let contract_id = env.register(MutualAidContract, ());
-//     let client = MutualAidContractClient::new(&env, &contract_id);
-//
-//     let token_admin = Address::generate(&env);
-//     let mock_token = env
-//         .register_stellar_asset_contract_v2(token_admin.clone())
-//         .address();
-//     let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
-//
-//     let admin = Address::generate(&env);
-//     let creator = Address::generate(&env);
-//     let donor = Address::generate(&env);
-//     token_admin_client.mint(&donor, &500);
-//
-//     env.as_contract(&contract_id, || {
-//         env.storage().instance().set(&DataKey::Admin, &admin);
-//     });
-//
-//     let request_id = 1u64;
-//     let goal = 1000i128;
-//
-//     client.post_help_request(&creator, &request_id, &goal, &mock_token);
-//     client.donate(&donor, &request_id, &500);
-//     client.dispute_request(&request_id, &creator);
-//
-//     // Random address tries to resolve — should panic
-//     client.resolve_dispute(&request_id, &true);
-// }
-//
-// // ─── Giveaway Dispute Tests ───────────────────────────────────────────────
-//
-// #[test]
-// fn test_dispute_giveaway_by_creator() {
-//     let env = Env::default();
-//     env.mock_all_auths();
-//
-//     let contract_id = env.register(GiveawayContract, ());
-//     let client = GiveawayContractClient::new(&env, &contract_id);
-//
-//     let token_admin = Address::generate(&env);
-//     let mock_token = env
-//         .register_stellar_asset_contract_v2(token_admin.clone())
-//         .address();
-//     let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
-//
-//     let creator = Address::generate(&env);
-//     let participant = Address::generate(&env);
-//     token_admin_client.mint(&creator, &1000);
-//
-//     env.as_contract(&contract_id, || {
-//         env.storage()
-//             .instance()
-//             .set(&DataKey::AllowedToken(mock_token.clone()), &true);
-//     });
-//
-//     let giveaway_id = client.create_giveaway(
-//         &creator,
-//         &mock_token,
-//         &500,
-//         &String::from_str(&env, "Test"),
-//         &60,
-//         &1,
-//         &None,
-//     );
-//
-//     client.enter_giveaway(&participant, &giveaway_id);
-//     client.dispute_giveaway(&giveaway_id, &creator);
-//
-//     let giveaway: Giveaway = env.as_contract(&contract_id, || {
-//         env.storage()
-//             .persistent()
-//             .get(&DataKey::Giveaway(giveaway_id))
-//             .unwrap()
-//     });
-//     assert_eq!(giveaway.status, GiveawayStatus::Disputed);
-// }
-//
-// #[test]
-// #[should_panic(expected = "InvalidStatus")]
-// fn test_enter_giveaway_blocked_while_disputed() {
-//     let env = Env::default();
-//     env.mock_all_auths();
-//
-//     let contract_id = env.register(GiveawayContract, ());
-//     let client = GiveawayContractClient::new(&env, &contract_id);
-//
-//     let token_admin = Address::generate(&env);
-//     let mock_token = env
-//         .register_stellar_asset_contract_v2(token_admin.clone())
-//         .address();
-//     let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
-//
-//     let creator = Address::generate(&env);
-//     let participant = Address::generate(&env);
-//     let latecomer = Address::generate(&env);
-//     token_admin_client.mint(&creator, &1000);
-//
-//     env.as_contract(&contract_id, || {
-//         env.storage()
-//             .instance()
-//             .set(&DataKey::AllowedToken(mock_token.clone()), &true);
-//     });
-//
-//     let giveaway_id = client.create_giveaway(
-//         &creator,
-//         &mock_token,
-//         &500,
-//         &String::from_str(&env, "Test"),
-//         &60,
-//         &1,
-//         &None,
-//     );
-//
-//     client.enter_giveaway(&participant, &giveaway_id);
-//     client.dispute_giveaway(&giveaway_id, &creator);
-//
-//     // Should panic — entry blocked while disputed
-//     client.enter_giveaway(&latecomer, &giveaway_id);
-// }
-//
-// #[test]
-// #[should_panic(expected = "InvalidStatus")]
-// fn test_pick_winner_blocked_while_disputed() {
-//     let env = Env::default();
-//     env.mock_all_auths();
-//
-//     let contract_id = env.register(GiveawayContract, ());
-//     let client = GiveawayContractClient::new(&env, &contract_id);
-//
-//     let token_admin = Address::generate(&env);
-//     let mock_token = env
-//         .register_stellar_asset_contract_v2(token_admin.clone())
-//         .address();
-//     let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
-//
-//     let creator = Address::generate(&env);
-//     let participant = Address::generate(&env);
-//     token_admin_client.mint(&creator, &1000);
-//
-//     env.as_contract(&contract_id, || {
-//         env.storage()
-//             .instance()
-//             .set(&DataKey::AllowedToken(mock_token.clone()), &true);
-//     });
-//
-//     let giveaway_id = client.create_giveaway(
-//         &creator,
-//         &mock_token,
-//         &500,
-//         &String::from_str(&env, "Test"),
-//         &60,
-//         &1,
-//         &None,
-//     );
-//
-//     client.enter_giveaway(&participant, &giveaway_id);
-//     client.dispute_giveaway(&giveaway_id, &creator);
-//
-//     env.ledger().with_mut(|li| {
-//         li.timestamp += 100;
-//     });
-//
-//     // Should panic — winner selection blocked while disputed
-//     client.pick_winner(&giveaway_id);
-// }
-//
-// #[test]
-// fn test_admin_resolves_giveaway_dispute_release() {
-//     let env = Env::default();
-//     env.mock_all_auths();
-//
-//     let contract_id = env.register(GiveawayContract, ());
-//     let client = GiveawayContractClient::new(&env, &contract_id);
-//
-//     let token_admin = Address::generate(&env);
-//     let mock_token = env
-//         .register_stellar_asset_contract_v2(token_admin.clone())
-//         .address();
-//     let token_client = token::Client::new(&env, &mock_token);
-//     let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
-//
-//     let admin = Address::generate(&env);
-//     let creator = Address::generate(&env);
-//     let participant = Address::generate(&env);
-//     token_admin_client.mint(&creator, &1000);
-//
-//     env.as_contract(&contract_id, || {
-//         env.storage()
-//             .instance()
-//             .set(&DataKey::AllowedToken(mock_token.clone()), &true);
-//         env.storage().instance().set(&DataKey::Admin, &admin);
-//     });
-//
-//     let giveaway_id = client.create_giveaway(
-//         &creator,
-//         &mock_token,
-//         &500,
-//         &String::from_str(&env, "Test"),
-//         &60,
-//         &1,
-//         &None,
-//     );
-//
-//     client.enter_giveaway(&participant, &giveaway_id);
-//     client.dispute_giveaway(&giveaway_id, &creator);
-//
-//     // Admin resolves — release funds (distribute prizes)
-//     client.resolve_giveaway_dispute(&giveaway_id, &true);
-//
-//     let giveaway: Giveaway = env.as_contract(&contract_id, || {
-//         env.storage()
-//             .persistent()
-//             .get(&DataKey::Giveaway(giveaway_id))
-//             .unwrap()
-//     });
-//     assert_eq!(giveaway.status, GiveawayStatus::ResolvedRelease);
-//     assert_eq!(token_client.balance(&participant), 500);
-// }
-//
-// #[test]
-// fn test_admin_resolves_giveaway_dispute_refund() {
-//     let env = Env::default();
-//     env.mock_all_auths();
-//
-//     let contract_id = env.register(GiveawayContract, ());
-//     let client = GiveawayContractClient::new(&env, &contract_id);
-//
-//     let token_admin = Address::generate(&env);
-//     let mock_token = env
-//         .register_stellar_asset_contract_v2(token_admin.clone())
-//         .address();
-//     let token_client = token::Client::new(&env, &mock_token);
-//     let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
-//
-//     let admin = Address::generate(&env);
-//     let creator = Address::generate(&env);
-//     let participant = Address::generate(&env);
-//     token_admin_client.mint(&creator, &1000);
-//
-//     env.as_contract(&contract_id, || {
-//         env.storage()
-//             .instance()
-//             .set(&DataKey::AllowedToken(mock_token.clone()), &true);
-//         env.storage().instance().set(&DataKey::Admin, &admin);
-//     });
-//
-//     let giveaway_id = client.create_giveaway(
-//         &creator,
-//         &mock_token,
-//         &500,
-//         &String::from_str(&env, "Test"),
-//         &60,
-//         &1,
-//         &None,
-//     );
-//
-//     client.enter_giveaway(&participant, &giveaway_id);
-//     client.dispute_giveaway(&giveaway_id, &creator);
-//
-//     // Admin resolves — refund creator
-//     client.resolve_giveaway_dispute(&giveaway_id, &false);
-//
-//     let giveaway: Giveaway = env.as_contract(&contract_id, || {
-//         env.storage()
-//             .persistent()
-//             .get(&DataKey::Giveaway(giveaway_id))
-//             .unwrap()
-//     });
-//     assert_eq!(giveaway.status, GiveawayStatus::ResolvedRefund);
-//     assert_eq!(token_client.balance(&creator), 1000);
-// }
+    let contract_id = env.register(GiveawayContract, ());
+    let client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let participant1 = Address::generate(&env);
+    let participant2 = Address::generate(&env);
+    let participant3 = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = client.create_giveaway_with_selection(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "Manual Test"),
+        &60,
+        &2,
+        &None,
+        &SelectionMethod::Manual,
+    );
+
+    client.enter_giveaway(&participant1, &giveaway_id);
+    client.enter_giveaway(&participant2, &giveaway_id);
+    client.enter_giveaway(&participant3, &giveaway_id);
+
+    env.ledger().with_mut(|li| li.timestamp += 100);
+
+    let mut winners = Vec::new(&env);
+    winners.push_back(participant2.clone());
+    winners.push_back(participant3.clone());
+
+    let winner = client.finalize_manual_winners(&creator, &giveaway_id, &winners);
+
+    assert!(winner == participant2 || winner == participant3);
+
+    let stored_winners: Vec<Address> = env.as_contract(&contract_id, || {
+        let g: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap();
+        g.winners
+    });
+
+    assert_eq!(stored_winners.len(), 2);
+    assert!(stored_winners.contains(&participant2));
+    assert!(stored_winners.contains(&participant3));
+}
+
+#[test]
+#[should_panic]
+fn test_manual_winner_selection_fails_non_creator() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let random_user = Address::generate(&env);
+    let participant = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = client.create_giveaway_with_selection(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "Manual Test"),
+        &60,
+        &1,
+        &None,
+        &SelectionMethod::Manual,
+    );
+
+    client.enter_giveaway(&participant, &giveaway_id);
+    env.ledger().with_mut(|li| li.timestamp += 100);
+
+    let mut winners = Vec::new(&env);
+    winners.push_back(participant.clone());
+    client.finalize_manual_winners(&random_user, &giveaway_id, &winners);
+}
+
+#[test]
+fn test_merit_winner_selection() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let participant1 = Address::generate(&env); // rep 10
+    let participant2 = Address::generate(&env); // rep 50
+    let participant3 = Address::generate(&env); // rep 30
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Reputation(participant1.clone()), &10u64);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Reputation(participant2.clone()), &50u64);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Reputation(participant3.clone()), &30u64);
+    });
+
+    let giveaway_id = client.create_giveaway_with_selection(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "Merit Test"),
+        &60,
+        &2,
+        &None,
+        &SelectionMethod::Merit,
+    );
+
+    client.enter_giveaway(&participant1, &giveaway_id);
+    client.enter_giveaway(&participant2, &giveaway_id);
+    client.enter_giveaway(&participant3, &giveaway_id);
+
+    env.ledger().with_mut(|li| li.timestamp += 100);
+
+    let winner = client.finalize_merit_winners(&creator, &giveaway_id);
+    assert_eq!(winner, participant2);
+
+    let stored_winners: Vec<Address> = env.as_contract(&contract_id, || {
+        let g: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap();
+        g.winners
+    });
+
+    assert_eq!(stored_winners.len(), 2);
+    assert_eq!(stored_winners.get(0).unwrap(), participant2);
+    assert_eq!(stored_winners.get(1).unwrap(), participant3);
+}
+
+#[test]
+#[should_panic]
+fn test_pick_winner_fails_on_manual_giveaway() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let participant = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = client.create_giveaway_with_selection(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "Test"),
+        &60,
+        &1,
+        &None,
+        &SelectionMethod::Manual,
+    );
+
+    client.enter_giveaway(&participant, &giveaway_id);
+    env.ledger().with_mut(|li| li.timestamp += 100);
+    client.pick_winner(&giveaway_id);
+}
+
+#[test]
+fn test_admin_can_finalize_manual_winners() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let participant = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    client.init(&admin, &100);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = client.create_giveaway_with_selection(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "Admin Test"),
+        &60,
+        &1,
+        &None,
+        &SelectionMethod::Manual,
+    );
+
+    client.enter_giveaway(&participant, &giveaway_id);
+    env.ledger().with_mut(|li| li.timestamp += 100);
+
+    let mut winners = Vec::new(&env);
+    winners.push_back(participant.clone());
+
+    client.finalize_manual_winners(&admin, &giveaway_id, &winners);
+}
