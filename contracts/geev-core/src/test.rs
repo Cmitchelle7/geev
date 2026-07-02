@@ -1783,6 +1783,7 @@ fn test_enter_suspended_giveaway_fails() {
                 winners: Vec::new(&env),
                 verification_type: 0,
                 min_reputation: 0,
+                selection_method: SelectionMethod::Random,
             },
         );
     });

@@ -208,7 +208,7 @@ impl GiveawayContract {
             panic_with_error!(&env, Error::InvalidStatus);
         }
 
-        ensure_ready_for_selection(&env, &giveaway);
+        Self::ensure_ready_for_selection(&env, &giveaway);
 
         let random_seed = env.prng().gen::<u64>();
         let mut selected_indexes: Vec<u32> = Vec::new(&env);
@@ -243,7 +243,7 @@ impl GiveawayContract {
             winners.push_back(winner_address.clone());
         }
 
-        finalize_winners(&env, &giveaway_key, giveaway, winners)
+        Self::finalize_winners(&env, &giveaway_key, giveaway, winners)
     }
 
     pub fn distribute_prize(env: Env, giveaway_id: u64) {
@@ -464,17 +464,18 @@ impl GiveawayContract {
             participants_with_reputation.push_back((participant, reputation));
         }
         // Sort by reputation descending (very simple sort)
-        let mut sorted = Vec::new(env);
+        let mut sorted: Vec<(Address, u64)> = Vec::new(env);
         for pr in participants_with_reputation.iter() {
+            let pr_clone = pr.clone();
             let mut inserted = false;
             for i in 0..sorted.len() {
                 let existing = sorted.get_unchecked(i);
-                if pr.1 > existing.1 {
+                if pr_clone.1 > existing.1 {
                     let mut temp = Vec::new(env);
                     for j in 0..i {
                         temp.push_back(sorted.get_unchecked(j));
                     }
-                    temp.push_back(pr);
+                    temp.push_back(pr_clone.clone());
                     for j in i..sorted.len() {
                         temp.push_back(sorted.get_unchecked(j));
                     }
@@ -484,13 +485,13 @@ impl GiveawayContract {
                 }
             }
             if !inserted {
-                sorted.push_back(pr);
+                sorted.push_back(pr_clone);
             }
         }
         // Take top N winners
         let mut winners = Vec::new(env);
         for i in 0..winner_count {
-            winners.push_back(sorted.get_unchecked(i as usize).0.clone());
+            winners.push_back(sorted.get_unchecked(i).0.clone());
         }
         winners
     }
@@ -571,20 +572,20 @@ impl GiveawayContract {
             .unwrap_or_else(|| panic_with_error!(&env, Error::GiveawayNotFound));
 
         // Validate
-        ensure_creator_or_admin(&env, &caller, &giveaway);
-        ensure_ready_for_selection(&env, &giveaway);
+        Self::ensure_creator_or_admin(&env, &caller, &giveaway);
+        Self::ensure_ready_for_selection(&env, &giveaway);
 
         if giveaway.selection_method != SelectionMethod::Manual {
             panic_with_error!(&env, Error::InvalidStatus);
         }
 
-        if winners.len() != giveaway.winner_count as usize {
+        if winners.len() as u32 != giveaway.winner_count {
             panic_with_error!(&env, Error::InvalidWinnerCount);
         }
 
-        validate_manual_winners(&env, giveaway_id, &winners);
+        Self::validate_manual_winners(&env, giveaway_id, &winners);
 
-        finalize_winners(&env, &giveaway_key, giveaway, winners)
+        Self::finalize_winners(&env, &giveaway_key, giveaway, winners)
     }
 
     /// Finalize a giveaway with merit-based selected winners (by reputation)
@@ -604,19 +605,19 @@ impl GiveawayContract {
             .unwrap_or_else(|| panic_with_error!(&env, Error::GiveawayNotFound));
 
         // Validate
-        ensure_creator_or_admin(&env, &caller, &giveaway);
-        ensure_ready_for_selection(&env, &giveaway);
+        Self::ensure_creator_or_admin(&env, &caller, &giveaway);
+        Self::ensure_ready_for_selection(&env, &giveaway);
 
         if giveaway.selection_method != SelectionMethod::Merit {
             panic_with_error!(&env, Error::InvalidStatus);
         }
 
-        let winners = select_merit_winners(
+        let winners = Self::select_merit_winners(
             &env,
             giveaway_id,
             giveaway.winner_count,
             giveaway.participant_count,
         );
-        finalize_winners(&env, &giveaway_key, giveaway, winners)
+        Self::finalize_winners(&env, &giveaway_key, giveaway, winners)
     }
 }
