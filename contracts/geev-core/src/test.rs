@@ -1982,7 +1982,7 @@ fn test_manual_winner_selection() {
         &60,
         &2,
         &None,
-        SelectionMethod::Manual,
+        &SelectionMethod::Manual,
     );
 
     client.enter_giveaway(&participant1, &giveaway_id);
@@ -1995,7 +1995,7 @@ fn test_manual_winner_selection() {
     winners.push_back(participant2.clone());
     winners.push_back(participant3.clone());
 
-    let winner = client.finalize_manual_winners(&creator, &giveaway_id, winners);
+    let winner = client.finalize_manual_winners(&creator, &giveaway_id, &winners);
 
     assert!(winner == participant2 || winner == participant3);
 
@@ -2047,7 +2047,7 @@ fn test_manual_winner_selection_fails_non_creator() {
         &60,
         &1,
         &None,
-        SelectionMethod::Manual,
+        &SelectionMethod::Manual,
     );
 
     client.enter_giveaway(&participant, &giveaway_id);
@@ -2055,7 +2055,7 @@ fn test_manual_winner_selection_fails_non_creator() {
 
     let mut winners = Vec::new(&env);
     winners.push_back(participant.clone());
-    client.finalize_manual_winners(&random_user, &giveaway_id, winners);
+    client.finalize_manual_winners(&random_user, &giveaway_id, &winners);
 }
 
 #[test]
@@ -2101,7 +2101,7 @@ fn test_merit_winner_selection() {
         &60,
         &2,
         &None,
-        SelectionMethod::Merit,
+        &SelectionMethod::Merit,
     );
 
     client.enter_giveaway(&participant1, &giveaway_id);
@@ -2160,7 +2160,7 @@ fn test_pick_winner_fails_on_manual_giveaway() {
         &60,
         &1,
         &None,
-        SelectionMethod::Manual,
+        &SelectionMethod::Manual,
     );
 
     client.enter_giveaway(&participant, &giveaway_id);
@@ -2203,7 +2203,7 @@ fn test_admin_can_finalize_manual_winners() {
         &60,
         &1,
         &None,
-        SelectionMethod::Manual,
+        &SelectionMethod::Manual,
     );
 
     client.enter_giveaway(&participant, &giveaway_id);
@@ -2212,5 +2212,5 @@ fn test_admin_can_finalize_manual_winners() {
     let mut winners = Vec::new(&env);
     winners.push_back(participant.clone());
 
-    client.finalize_manual_winners(&admin, &giveaway_id, winners);
+    client.finalize_manual_winners(&admin, &giveaway_id, &winners);
 }

@@ -579,7 +579,7 @@ impl GiveawayContract {
             panic_with_error!(&env, Error::InvalidStatus);
         }
 
-        if winners.len() as u32 != giveaway.winner_count {
+        if winners.len() != giveaway.winner_count {
             panic_with_error!(&env, Error::InvalidWinnerCount);
         }
 
