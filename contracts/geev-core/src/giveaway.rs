@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_arguments)]
 use crate::profile::ProfileContract;
 use crate::types::{
     DataKey, Error, Giveaway, GiveawayStatus, ParticipantVerification, SelectionMethod,
@@ -31,8 +32,8 @@ pub struct GiveawayWinnerSelected {
     prize_amount: i128,
 }
 
-#[contractimpl]
 #[allow(clippy::too_many_arguments)]
+#[contractimpl]
 impl GiveawayContract {
     #[allow(clippy::too_many_arguments)]
     pub fn create_giveaway(
