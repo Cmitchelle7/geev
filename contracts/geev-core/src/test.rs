@@ -2214,3 +2214,123 @@ fn test_admin_can_finalize_manual_winners() {
 
     client.finalize_manual_winners(&admin, &giveaway_id, &winners);
 }
+
+#[test]
+fn test_transfer_admin_success() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AdminContract, ());
+    let contract_client = AdminContractClient::new(&env, &contract_id);
+
+    let current_admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::Admin, &current_admin);
+    });
+
+    contract_client.transfer_admin(&current_admin, &new_admin);
+
+    // events().all() only returns events from the last contract invocation
+    let events = env.events().all();
+    let expected_topics: soroban_sdk::Vec<Val> = vec![
+        &env,
+        symbol_short!("admin").into_val(&env),
+        symbol_short!("transfer").into_val(&env),
+        current_admin.into_val(&env),
+    ];
+    assert!(
+        events.iter().any(|(event_contract, topics, data)| {
+            if event_contract != contract_id || topics != expected_topics.into_val(&env) {
+                return false;
+            }
+            let data_vec: soroban_sdk::Vec<Val> = soroban_sdk::Vec::from_val(&env, &data);
+            let next = Address::from_val(&env, &data_vec.get(0).unwrap());
+            next == new_admin
+        }),
+        "AdminTransferred event was not emitted with the expected addresses"
+    );
+
+    env.as_contract(&contract_id, || {
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        assert_eq!(stored_admin, new_admin);
+    });
+}
+
+#[test]
+#[should_panic]
+fn test_transfer_admin_fails_when_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AdminContract, ());
+    let contract_client = AdminContractClient::new(&env, &contract_id);
+
+    let current_admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    // DO NOT initialize admin - should panic
+    contract_client.transfer_admin(&current_admin, &new_admin);
+}
+
+#[test]
+#[should_panic]
+fn test_transfer_admin_fails_wrong_current_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AdminContract, ());
+    let contract_client = AdminContractClient::new(&env, &contract_id);
+
+    let current_admin = Address::generate(&env);
+    let impostor = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::Admin, &current_admin);
+    });
+
+    // Impostor address does not match stored admin - should panic
+    contract_client.transfer_admin(&impostor, &new_admin);
+}
+
+#[test]
+fn test_new_admin_can_perform_gated_actions_after_transfer() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AdminContract, ());
+    let contract_client = AdminContractClient::new(&env, &contract_id);
+
+    let current_admin = Address::generate(&env);
+    let new_admin = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::Admin, &current_admin);
+    });
+
+    contract_client.transfer_admin(&current_admin, &new_admin);
+
+    // New admin can perform gated actions
+    contract_client.add_token(&token);
+
+    env.as_contract(&contract_id, || {
+        let stored_admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        assert_eq!(stored_admin, new_admin);
+
+        let is_allowed: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedToken(token.clone()))
+            .unwrap_or(false);
+        assert!(is_allowed);
+    });
+}

@@ -30,6 +30,15 @@ pub struct AppealResolved {
     restored: bool,
 }
 
+/// Emitted when admin control is transferred. Topics are `admin`, `transfer`,
+/// plus the previous admin address; data is `[new_admin]`.
+#[contractevent(topics = ["admin", "transfer"], data_format = "vec")]
+pub struct AdminTransferred {
+    #[topic]
+    previous_admin: Address,
+    new_admin: Address,
+}
+
 #[contractimpl]
 impl AdminContract {
     /// Emergency withdraw function - callable only by Admin
@@ -156,5 +165,30 @@ impl AdminContract {
             }
             .publish(&env);
         }
+    }
+
+    /// Transfer admin role to a new address - callable only by the current Admin
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `current_admin` - The address of the current admin (must match stored admin)
+    /// * `new_admin` - The address that will become the new admin
+    ///
+    /// # Panics
+    /// Panics if called by a non-admin address or if `current_admin` does not match storage
+    pub fn transfer_admin(env: Env, current_admin: Address, new_admin: Address) {
+        let admin = check_admin(&env);
+
+        if admin != current_admin {
+            panic_with_error!(&env, Error::NotAdmin);
+        }
+
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
+
+        AdminTransferred {
+            previous_admin: current_admin,
+            new_admin,
+        }
+        .publish(&env);
     }
 }
