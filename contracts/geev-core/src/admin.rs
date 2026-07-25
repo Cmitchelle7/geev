@@ -18,6 +18,11 @@ pub struct TokenAdded {
 }
 
 #[contractevent]
+pub struct TokenRemoved {
+    token: Address,
+}
+
+#[contractevent]
 pub struct RequestVerificationChanged {
     request_id: u64,
     is_verified: bool,
@@ -90,6 +95,31 @@ impl AdminContract {
 
         // Emit TokenAdded event
         TokenAdded { token }.publish(&env);
+    }
+
+    /// Remove a token from the whitelist - callable only by Admin.
+    ///
+    /// Delisting only blocks **new** giveaway creation: `create_giveaway` rejects
+    /// tokens that are not allowlisted (`Error::TokenNotSupported`).
+    ///
+    /// Previously funded records remain fully supported after delisting:
+    /// existing giveaways can still accept entries, select winners, and
+    /// distribute prizes; existing help requests can still receive donations
+    /// and process refunds. Lifecycle of in-flight escrow is unchanged.
+    ///
+    /// # Arguments
+    /// * `env` - The contract environment
+    /// * `token` - The token address to delist
+    ///
+    /// # Panics
+    /// Panics if called by non-admin address
+    pub fn remove_token(env: Env, token: Address) {
+        check_admin(&env);
+
+        let token_key = DataKey::AllowedToken(token.clone());
+        env.storage().instance().set(&token_key, &false);
+
+        TokenRemoved { token }.publish(&env);
     }
 
     pub fn toggle_request_verification(env: Env, request_id: u64) {
