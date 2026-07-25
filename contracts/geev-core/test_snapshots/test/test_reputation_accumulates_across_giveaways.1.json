@@ -413,6 +413,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "selection_method"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "status"
                       },
                       "val": {
@@ -555,6 +563,14 @@
                       },
                       "val": {
                         "u32": 1
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "selection_method"
+                      },
+                      "val": {
+                        "u32": 0
                       }
                     },
                     {
