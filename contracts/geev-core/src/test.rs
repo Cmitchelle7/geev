@@ -236,7 +236,8 @@ fn test_multi_winner_giveaway_selects_unique_winners() {
         giveaway.winners.clone()
     });
 
-    contract_client.distribute_prize(&giveaway_id);
+    contract_client.claim_prize(&giveaway_id, &winners.get(0).unwrap());
+    contract_client.claim_prize(&giveaway_id, &winners.get(1).unwrap());
 
     let winner1_balance = token::Client::new(&env, &mock_token).balance(&winners.get(0).unwrap());
     let winner2_balance = token::Client::new(&env, &mock_token).balance(&winners.get(1).unwrap());
@@ -660,7 +661,7 @@ fn test_donation_with_invalid_amount_fails() {
 }
 
 #[test]
-fn test_distribute_prize() {
+fn test_claim_prize() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -708,7 +709,7 @@ fn test_distribute_prize() {
     assert_eq!(token_client.balance(&winner), 0);
     assert_eq!(token_client.balance(&contract_id), 500);
 
-    contract_client.distribute_prize(&giveaway_id);
+    contract_client.claim_prize(&giveaway_id, &winner);
 
     // Winner receives 99% (500 - 1% fee = 495)
     assert_eq!(token_client.balance(&winner), 495);
@@ -740,7 +741,7 @@ fn test_init_contract() {
 
 #[test]
 #[should_panic]
-fn test_distribute_prize_wrong_status_fails() {
+fn test_claim_prize_wrong_status_fails() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -773,7 +774,7 @@ fn test_distribute_prize_wrong_status_fails() {
         &None,
     );
 
-    contract_client.distribute_prize(&giveaway_id);
+    contract_client.claim_prize(&giveaway_id, &creator);
 }
 
 #[test]
@@ -960,7 +961,7 @@ fn test_refund_flow() {
 
 #[test]
 #[should_panic(expected = "reentrancy detected")]
-fn test_distribute_prize_reentrancy_protection() {
+fn test_claim_prize_reentrancy_protection() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -1002,14 +1003,14 @@ fn test_distribute_prize_reentrancy_protection() {
 
     contract_client.pick_winner(&giveaway_id);
 
-    // Simulate the lock already being held before distribute_prize is called
+    // Simulate the lock already being held before claim_prize is called
     // as if a reentrant call is in progress
     env.as_contract(&contract_id, || {
         env.storage().temporary().set(&symbol_short!("Lock"), &true);
     });
 
     // This should panic with "reentrancy detected" because the lock is already set
-    contract_client.distribute_prize(&giveaway_id);
+    contract_client.claim_prize(&giveaway_id, &winner);
 }
 
 #[test]
@@ -1304,7 +1305,7 @@ fn test_withdraw_fees() {
     });
 
     giveaway_client.pick_winner(&giveaway_id);
-    giveaway_client.distribute_prize(&giveaway_id);
+    giveaway_client.claim_prize(&giveaway_id, &winner);
 
     // Verify fees were collected (5 tokens = 1% of 500)
     assert_eq!(token_client.balance(&giveaway_contract_id), 5);
@@ -1612,6 +1613,8 @@ fn seed_active_giveaway(env: &Env, contract_id: &Address, giveaway_id: u64, toke
         verification_type: 0,
         min_reputation: 0,
         selection_method: SelectionMethod::Random,
+        claim_deadline: 0,
+        claimed_count: 0,
     };
     env.as_contract(contract_id, || {
         env.storage()
@@ -1784,6 +1787,8 @@ fn test_enter_suspended_giveaway_fails() {
                 verification_type: 0,
                 min_reputation: 0,
                 selection_method: SelectionMethod::Random,
+                claim_deadline: 0,
+                claimed_count: 0,
             },
         );
     });
@@ -1847,7 +1852,7 @@ fn test_reputation_starts_at_zero() {
 }
 
 #[test]
-fn test_reputation_increments_after_distribute_prize() {
+fn test_reputation_increments_after_claim_prize() {
     let env = Env::default();
     env.mock_all_auths();
 
@@ -1884,7 +1889,7 @@ fn test_reputation_increments_after_distribute_prize() {
 
     env.ledger().with_mut(|li| li.timestamp += 100);
     client.pick_winner(&giveaway_id);
-    client.distribute_prize(&giveaway_id);
+    client.claim_prize(&giveaway_id, &participant);
 
     // Creator's reputation should now be 1.
     env.as_contract(&contract_id, || {
@@ -1935,7 +1940,7 @@ fn test_reputation_accumulates_across_giveaways() {
         client.enter_giveaway(&participant, &giveaway_id);
         env.ledger().with_mut(|li| li.timestamp += 100);
         client.pick_winner(&giveaway_id);
-        client.distribute_prize(&giveaway_id);
+        client.claim_prize(&giveaway_id, &participant);
     }
 
     env.as_contract(&contract_id, || {
@@ -2482,4 +2487,372 @@ fn test_existing_giveaway_continues_after_token_delist() {
 
     let winner = contract_client.pick_winner(&giveaway_id);
     assert_eq!(winner, participant);
+}
+
+// ── claim timeout & recovery tests ────────────────────────────────────────
+
+#[test]
+#[should_panic]
+fn test_claim_prize_after_expiry_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let contract_client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let winner = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = contract_client.create_giveaway(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "Expiry Test"),
+        &60,
+        &1,
+        &None,
+    );
+
+    contract_client.enter_giveaway(&winner, &giveaway_id);
+    env.ledger().with_mut(|li| li.timestamp += 100);
+    contract_client.pick_winner(&giveaway_id);
+
+    // Advance past the claim window (7 days).
+    env.ledger()
+        .with_mut(|li| li.timestamp += 7 * 24 * 60 * 60 + 1);
+
+    contract_client.claim_prize(&giveaway_id, &winner);
+}
+
+#[test]
+#[should_panic]
+fn test_claim_prize_twice_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let contract_client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let winner = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = contract_client.create_giveaway(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "Double Claim Test"),
+        &60,
+        &1,
+        &None,
+    );
+
+    contract_client.enter_giveaway(&winner, &giveaway_id);
+    env.ledger().with_mut(|li| li.timestamp += 100);
+    contract_client.pick_winner(&giveaway_id);
+
+    contract_client.claim_prize(&giveaway_id, &winner);
+    contract_client.claim_prize(&giveaway_id, &winner);
+}
+
+#[test]
+#[should_panic]
+fn test_claim_prize_by_non_winner_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let contract_client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let participant1 = Address::generate(&env);
+    let participant2 = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = contract_client.create_giveaway(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "Non Winner Test"),
+        &60,
+        &1,
+        &None,
+    );
+
+    contract_client.enter_giveaway(&participant1, &giveaway_id);
+    contract_client.enter_giveaway(&participant2, &giveaway_id);
+    env.ledger().with_mut(|li| li.timestamp += 100);
+    let winner = contract_client.pick_winner(&giveaway_id);
+    let non_winner = if winner == participant1 {
+        participant2
+    } else {
+        participant1
+    };
+
+    contract_client.claim_prize(&giveaway_id, &non_winner);
+}
+
+#[test]
+#[should_panic]
+fn test_recover_before_expiry_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let contract_client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let winner = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = contract_client.create_giveaway(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "Early Recovery Test"),
+        &60,
+        &1,
+        &None,
+    );
+
+    contract_client.enter_giveaway(&winner, &giveaway_id);
+    env.ledger().with_mut(|li| li.timestamp += 100);
+    contract_client.pick_winner(&giveaway_id);
+
+    contract_client.recover_unclaimed_prize(&giveaway_id, &creator);
+}
+
+#[test]
+fn test_recover_after_expiry_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let contract_client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = token::Client::new(&env, &mock_token);
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let winner = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = contract_client.create_giveaway(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "Recovery Test"),
+        &60,
+        &1,
+        &None,
+    );
+
+    contract_client.enter_giveaway(&winner, &giveaway_id);
+    env.ledger().with_mut(|li| li.timestamp += 100);
+    contract_client.pick_winner(&giveaway_id);
+
+    // Creator's balance after funding the giveaway.
+    assert_eq!(token_client.balance(&creator), 500);
+
+    env.ledger()
+        .with_mut(|li| li.timestamp += 7 * 24 * 60 * 60 + 1);
+    contract_client.recover_unclaimed_prize(&giveaway_id, &creator);
+
+    // The full unclaimed amount (no fee — it was never claimed) returns to the creator.
+    assert_eq!(token_client.balance(&creator), 1000);
+    assert_eq!(token_client.balance(&contract_id), 0);
+    assert_eq!(token_client.balance(&winner), 0);
+
+    env.as_contract(&contract_id, || {
+        let giveaway: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap();
+        assert_eq!(giveaway.status, GiveawayStatus::Completed);
+    });
+}
+
+#[test]
+#[should_panic]
+fn test_recover_by_unauthorized_caller_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let contract_client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let winner = Address::generate(&env);
+    let stranger = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = contract_client.create_giveaway(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "Unauthorized Recovery Test"),
+        &60,
+        &1,
+        &None,
+    );
+
+    contract_client.enter_giveaway(&winner, &giveaway_id);
+    env.ledger().with_mut(|li| li.timestamp += 100);
+    contract_client.pick_winner(&giveaway_id);
+    env.ledger()
+        .with_mut(|li| li.timestamp += 7 * 24 * 60 * 60 + 1);
+
+    contract_client.recover_unclaimed_prize(&giveaway_id, &stranger);
+}
+
+#[test]
+fn test_partial_claim_recovery() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let contract_client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = token::Client::new(&env, &mock_token);
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let participant1 = Address::generate(&env);
+    let participant2 = Address::generate(&env);
+    let participant3 = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = contract_client.create_giveaway(
+        &creator,
+        &mock_token,
+        &400,
+        &String::from_str(&env, "Partial Claim Recovery Test"),
+        &60,
+        &2,
+        &None,
+    );
+
+    contract_client.enter_giveaway(&participant1, &giveaway_id);
+    contract_client.enter_giveaway(&participant2, &giveaway_id);
+    contract_client.enter_giveaway(&participant3, &giveaway_id);
+    env.ledger().with_mut(|li| li.timestamp += 100);
+    contract_client.pick_winner(&giveaway_id);
+
+    let winners: Vec<Address> = env.as_contract(&contract_id, || {
+        let giveaway: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap();
+        giveaway.winners.clone()
+    });
+    let claimer = winners.get(0).unwrap();
+    let ghost = winners.get(1).unwrap();
+
+    // Only one of the two winners claims before the deadline.
+    contract_client.claim_prize(&giveaway_id, &claimer);
+    let claimer_balance_after_claim = token_client.balance(&claimer);
+    assert!(claimer_balance_after_claim > 0);
+
+    env.ledger()
+        .with_mut(|li| li.timestamp += 7 * 24 * 60 * 60 + 1);
+    contract_client.recover_unclaimed_prize(&giveaway_id, &creator);
+
+    // The claimer's funds are untouched; only the ghost winner's share is recovered.
+    // The contract keeps the 2-token fee collected from the claimer's claim
+    // (1% of their 200-token gross share) until withdraw_fees is called.
+    assert_eq!(token_client.balance(&claimer), claimer_balance_after_claim);
+    assert_eq!(token_client.balance(&ghost), 0);
+    assert_eq!(token_client.balance(&contract_id), 2);
+
+    env.as_contract(&contract_id, || {
+        let giveaway: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap();
+        assert_eq!(giveaway.status, GiveawayStatus::Completed);
+    });
 }

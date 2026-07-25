@@ -8,6 +8,11 @@ use soroban_sdk::{
     contract, contractevent, contractimpl, panic_with_error, token, Address, Env, String, Vec,
 };
 
+/// Duration, in seconds, that winners have to claim their prize after a
+/// giveaway becomes `Claimable`, before the creator (or admin) can recover
+/// any unclaimed shares. Currently fixed for all giveaways (7 days).
+const CLAIM_WINDOW_SECONDS: u64 = 7 * 24 * 60 * 60;
+
 #[contract]
 pub struct GiveawayContract;
 
@@ -112,6 +117,8 @@ impl GiveawayContract {
             verification_type,
             min_reputation,
             selection_method,
+            claim_deadline: 0,
+            claimed_count: 0,
         };
 
         if let Some(verification) = &verification {
@@ -247,7 +254,57 @@ impl GiveawayContract {
         Self::finalize_winners(&env, &giveaway_key, giveaway, winners)
     }
 
-    pub fn distribute_prize(env: Env, giveaway_id: u64) {
+    /// Splits `amount` evenly across `winner_count` winners, with the winner
+    /// at `index == 0` absorbing the integer-division remainder. Shared by
+    /// `finalize_winners`, `claim_prize`, and `recover_unclaimed_prize` so
+    /// the split math only lives in one place.
+    fn winner_gross_share(env: &Env, amount: i128, winner_count: u32, index: u32) -> i128 {
+        let winner_count = winner_count as i128;
+        let base_share = amount
+            .checked_div(winner_count)
+            .unwrap_or_else(|| panic_with_error!(env, Error::ArithmeticOverflow));
+        if index == 0 {
+            amount
+                .checked_sub(
+                    base_share
+                        .checked_mul(winner_count - 1)
+                        .unwrap_or_else(|| panic_with_error!(env, Error::ArithmeticOverflow)),
+                )
+                .unwrap_or_else(|| panic_with_error!(env, Error::ArithmeticOverflow))
+        } else {
+            base_share
+        }
+    }
+
+    fn find_winner_index(winners: &Vec<Address>, winner: &Address) -> Option<u32> {
+        for (index, candidate) in winners.iter().enumerate() {
+            if candidate == *winner {
+                return Some(index as u32);
+            }
+        }
+        None
+    }
+
+    fn add_collected_fees(env: &Env, token: &Address, fee_amount: i128) {
+        let collected_fees_key = DataKey::CollectedFees(token.clone());
+        let current_fees: i128 = env
+            .storage()
+            .persistent()
+            .get(&collected_fees_key)
+            .unwrap_or(0);
+        let new_fees = current_fees
+            .checked_add(fee_amount)
+            .unwrap_or_else(|| panic_with_error!(env, Error::ArithmeticOverflow));
+        env.storage()
+            .persistent()
+            .set(&collected_fees_key, &new_fees);
+    }
+
+    /// Called by an individual winner to claim their share of the prize
+    /// while the giveaway is `Claimable` and before `claim_deadline`.
+    pub fn claim_prize(env: Env, giveaway_id: u64, winner: Address) {
+        winner.require_auth();
+
         with_reentrancy_guard(&env, || {
             let giveaway_key = DataKey::Giveaway(giveaway_id);
             let mut giveaway: Giveaway = env
@@ -259,73 +316,106 @@ impl GiveawayContract {
             if giveaway.status != GiveawayStatus::Claimable {
                 panic_with_error!(&env, Error::InvalidStatus);
             }
-
-            let winners = giveaway.winners.clone();
-            if winners.is_empty() {
-                panic_with_error!(&env, Error::NoParticipants);
+            if env.ledger().timestamp() > giveaway.claim_deadline {
+                panic_with_error!(&env, Error::ClaimWindowExpired);
             }
 
-            // 1. Load 'fee_bps' from storage
+            let index = Self::find_winner_index(&giveaway.winners, &winner)
+                .unwrap_or_else(|| panic_with_error!(&env, Error::NotWinner));
+
+            let claimed_key = DataKey::Claimed(giveaway_id, winner.clone());
+            let already_claimed: bool = env
+                .storage()
+                .persistent()
+                .get(&claimed_key)
+                .unwrap_or(false);
+            if already_claimed {
+                panic_with_error!(&env, Error::AlreadyClaimed);
+            }
+
             let fee_key = DataKey::Fee;
             let fee_bps: u32 = env.storage().instance().get(&fee_key).unwrap_or(100); // Default to 100 bps (1%)
 
-            // 2. Calculate 'fee_amount' (fee_bps / 10000 * amount)
-            let fee_amount = giveaway
-                .amount
+            let gross_share =
+                Self::winner_gross_share(&env, giveaway.amount, giveaway.winner_count, index);
+            let fee_amount = gross_share
                 .checked_mul(fee_bps as i128)
                 .and_then(|v| v.checked_div(10_000))
                 .unwrap_or_else(|| panic_with_error!(&env, Error::ArithmeticOverflow));
-
-            // Calculate net prize
-            let net_prize = giveaway
-                .amount
+            let net_amount = gross_share
                 .checked_sub(fee_amount)
                 .unwrap_or_else(|| panic_with_error!(&env, Error::ArithmeticOverflow));
 
-            let winner_count = winners.len() as i128;
-            let base_share = net_prize
-                .checked_div(winner_count)
-                .unwrap_or_else(|| panic_with_error!(&env, Error::ArithmeticOverflow));
-
-            let mut distributed = 0i128;
             let token_client = token::Client::new(&env, &giveaway.token);
+            token_client.transfer(&env.current_contract_address(), &winner, &net_amount);
+            Self::add_collected_fees(&env, &giveaway.token, fee_amount);
 
-            for (index, winner) in winners.iter().enumerate() {
-                let mut prize_amount = base_share;
-                if index == 0 {
-                    let remainder =
-                        net_prize
-                            .checked_sub(base_share.checked_mul(winner_count - 1).unwrap_or_else(
-                                || panic_with_error!(&env, Error::ArithmeticOverflow),
-                            ))
-                            .unwrap_or_else(|| panic_with_error!(&env, Error::ArithmeticOverflow));
-                    prize_amount = remainder;
-                }
-                distributed = distributed
-                    .checked_add(prize_amount)
-                    .unwrap_or_else(|| panic_with_error!(&env, Error::ArithmeticOverflow));
-                token_client.transfer(&env.current_contract_address(), winner, &prize_amount);
+            env.storage().persistent().set(&claimed_key, &true);
+            giveaway.claimed_count += 1;
+
+            if giveaway.claimed_count == giveaway.winners.len() {
+                giveaway.status = GiveawayStatus::Completed;
+                ProfileContract::increment_reputation(&env, giveaway.creator.clone());
             }
+            env.storage().persistent().set(&giveaway_key, &giveaway);
+        })
+    }
 
-            // 4. Add 'fee_amount' to CollectedFees storage counter
-            let collected_fees_key = DataKey::CollectedFees(giveaway.token.clone());
-            let current_fees: i128 = env
+    /// Called by the creator or admin, after `claim_deadline` has passed, to
+    /// sweep any still-unclaimed shares back to the creator and finalize the
+    /// giveaway. Shares already claimed by winners are untouched.
+    pub fn recover_unclaimed_prize(env: Env, giveaway_id: u64, caller: Address) {
+        caller.require_auth();
+
+        with_reentrancy_guard(&env, || {
+            let giveaway_key = DataKey::Giveaway(giveaway_id);
+            let mut giveaway: Giveaway = env
                 .storage()
                 .persistent()
-                .get(&collected_fees_key)
-                .unwrap_or(0);
-            let new_fees = current_fees
-                .checked_add(fee_amount)
-                .unwrap_or_else(|| panic_with_error!(&env, Error::ArithmeticOverflow));
-            env.storage()
-                .persistent()
-                .set(&collected_fees_key, &new_fees);
+                .get(&giveaway_key)
+                .unwrap_or_else(|| panic_with_error!(&env, Error::GiveawayNotFound));
+
+            Self::ensure_creator_or_admin(&env, &caller, &giveaway);
+
+            if giveaway.status != GiveawayStatus::Claimable {
+                panic_with_error!(&env, Error::InvalidStatus);
+            }
+            if env.ledger().timestamp() <= giveaway.claim_deadline {
+                panic_with_error!(&env, Error::ClaimWindowNotExpired);
+            }
+
+            let mut recoverable = 0i128;
+            for (index, winner) in giveaway.winners.iter().enumerate() {
+                let claimed_key = DataKey::Claimed(giveaway_id, winner.clone());
+                let already_claimed: bool = env
+                    .storage()
+                    .persistent()
+                    .get(&claimed_key)
+                    .unwrap_or(false);
+                if !already_claimed {
+                    let gross_share = Self::winner_gross_share(
+                        &env,
+                        giveaway.amount,
+                        giveaway.winner_count,
+                        index as u32,
+                    );
+                    recoverable = recoverable
+                        .checked_add(gross_share)
+                        .unwrap_or_else(|| panic_with_error!(&env, Error::ArithmeticOverflow));
+                }
+            }
+
+            if recoverable > 0 {
+                let token_client = token::Client::new(&env, &giveaway.token);
+                token_client.transfer(
+                    &env.current_contract_address(),
+                    &giveaway.creator,
+                    &recoverable,
+                );
+            }
 
             giveaway.status = GiveawayStatus::Completed;
             env.storage().persistent().set(&giveaway_key, &giveaway);
-
-            // Increment creator's reputation — internal call, not user-accessible.
-            ProfileContract::increment_reputation(&env, giveaway.creator.clone());
         })
     }
 
@@ -504,35 +594,12 @@ impl GiveawayContract {
         mut giveaway: Giveaway,
         winners: Vec<Address>,
     ) -> Address {
-        // Emit winner events
-        let fee_key = DataKey::Fee;
-        let fee_bps: u32 = env.storage().instance().get(&fee_key).unwrap_or(100);
-        let fee_amount = giveaway
-            .amount
-            .checked_mul(fee_bps as i128)
-            .and_then(|v| v.checked_div(10_000))
-            .unwrap_or_else(|| panic_with_error!(env, Error::ArithmeticOverflow));
-        let net_prize = giveaway
-            .amount
-            .checked_sub(fee_amount)
-            .unwrap_or_else(|| panic_with_error!(env, Error::ArithmeticOverflow));
-        let winner_count = giveaway.winner_count as i128;
-        let base_prize = net_prize
-            .checked_div(winner_count)
-            .unwrap_or_else(|| panic_with_error!(env, Error::ArithmeticOverflow));
-
+        // Emit winner events. `prize_amount` is each winner's gross share
+        // (before the per-claim fee deduction) — an estimate for indexers,
+        // since the authoritative payout happens in `claim_prize`.
         for (index, winner) in winners.iter().enumerate() {
-            let prize_amount = if index == 0 {
-                net_prize
-                    .checked_sub(
-                        base_prize
-                            .checked_mul(winner_count - 1)
-                            .unwrap_or_else(|| panic_with_error!(env, Error::ArithmeticOverflow)),
-                    )
-                    .unwrap_or_else(|| panic_with_error!(env, Error::ArithmeticOverflow))
-            } else {
-                base_prize
-            };
+            let prize_amount =
+                Self::winner_gross_share(env, giveaway.amount, giveaway.winner_count, index as u32);
             GiveawayWinnerSelected {
                 winner: winner.clone(),
                 giveaway_id: giveaway.id,
@@ -543,6 +610,7 @@ impl GiveawayContract {
 
         giveaway.winners = winners.clone();
         giveaway.status = GiveawayStatus::Claimable;
+        giveaway.claim_deadline = env.ledger().timestamp() + CLAIM_WINDOW_SECONDS;
         env.storage().persistent().set(giveaway_key, &giveaway);
 
         winners
