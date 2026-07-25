@@ -2334,3 +2334,152 @@ fn test_new_admin_can_perform_gated_actions_after_transfer() {
         assert!(is_allowed);
     });
 }
+
+#[test]
+fn test_remove_token_revokes_whitelist() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AdminContract, ());
+    let contract_client = AdminContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let token = Address::generate(&env);
+
+    env.as_contract(&contract_id, || {
+        env.storage().instance().set(&DataKey::Admin, &admin);
+    });
+
+    contract_client.add_token(&token);
+    contract_client.remove_token(&token);
+
+    env.as_contract(&contract_id, || {
+        let is_allowed: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::AllowedToken(token.clone()))
+            .unwrap_or(false);
+        assert!(!is_allowed);
+    });
+}
+
+#[test]
+#[should_panic]
+fn test_remove_token_fails_non_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AdminContract, ());
+    let contract_client = AdminContractClient::new(&env, &contract_id);
+
+    let token = Address::generate(&env);
+
+    // DO NOT initialize admin - should panic
+    contract_client.remove_token(&token);
+}
+
+#[test]
+fn test_create_giveaway_succeeds_before_and_fails_after_delist() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let contract_client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    token_admin_client.mint(&creator, &2000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    // Creation succeeds while token is allowlisted
+    let giveaway_id = contract_client.create_giveaway(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "Before Delist"),
+        &60,
+        &1,
+        &None,
+    );
+    assert_eq!(giveaway_id, 1);
+
+    // Delist token (same persistence as AdminContract::remove_token)
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &false);
+    });
+
+    // Creation with delisted token must fail
+    let result = contract_client.try_create_giveaway(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "After Delist"),
+        &60,
+        &1,
+        &None,
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_existing_giveaway_continues_after_token_delist() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let contract_client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let participant = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = contract_client.create_giveaway(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "Funded Before Delist"),
+        &60,
+        &1,
+        &None,
+    );
+
+    // Delist after funding — existing giveaway lifecycle remains supported
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &false);
+    });
+
+    contract_client.enter_giveaway(&participant, &giveaway_id);
+
+    env.ledger().with_mut(|li| {
+        li.timestamp += 100;
+    });
+
+    let winner = contract_client.pick_winner(&giveaway_id);
+    assert_eq!(winner, participant);
+}
