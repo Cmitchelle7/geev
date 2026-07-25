@@ -1,6 +1,5 @@
 # Soroban specific
 target/
-Cargo.lock
 **/*.wasm
 wasm32-unknown-unknown/
 **/*.opt.wasm
