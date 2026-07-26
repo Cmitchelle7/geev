@@ -247,6 +247,22 @@
                     },
                     {
                       "key": {
+                        "symbol": "claim_deadline"
+                      },
+                      "val": {
+                        "u64": "604900"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "claimed_count"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "creator"
                       },
                       "val": {
@@ -915,7 +931,7 @@
                   "u64": "1"
                 },
                 {
-                  "i128": "495"
+                  "i128": "500"
                 }
               ]
             }

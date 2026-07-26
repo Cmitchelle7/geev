@@ -79,7 +79,7 @@ impl ProfileContract {
 
 impl ProfileContract {
     /// Increment `user`'s reputation by 1.
-    /// Private — only callable from within this crate (e.g. `distribute_prize`).
+    /// Private — only callable from within this crate (e.g. `claim_prize`).
     /// Never exposed in the contract ABI.
     pub(crate) fn increment_reputation(env: &Env, user: Address) {
         let key = DataKey::Reputation(user);

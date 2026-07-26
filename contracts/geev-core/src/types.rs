@@ -30,6 +30,11 @@ pub enum Error {
     AlreadyDisputed = 23,
     NotDisputed = 24,
     NotAuthorizedResolver = 25,
+    // ─── Claim Lifecycle Errors ────────────────────────────────────────────
+    ClaimWindowExpired = 26,
+    ClaimWindowNotExpired = 27,
+    AlreadyClaimed = 28,
+    NotWinner = 29,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -78,6 +83,11 @@ pub struct Giveaway {
     pub verification_type: u32,
     pub min_reputation: u64,
     pub selection_method: SelectionMethod,
+    /// Ledger timestamp after which unclaimed shares can be recovered.
+    /// Set once, when `status` transitions to `Claimable`.
+    pub claim_deadline: u64,
+    /// Number of winners who have successfully called `claim_prize`.
+    pub claimed_count: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -130,6 +140,8 @@ pub enum DataKey {
     // ─── Dispute Tracking ──────────────────────────────────────────────────
     DisputeRaisedAt(u64),          // timestamp when dispute was raised
     DisputeRaisedBy(u64, Address), // who raised the dispute
+    // ─── Claim Lifecycle Tracking ──────────────────────────────────────────
+    Claimed(u64, Address), // whether a given winner has claimed their share
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
