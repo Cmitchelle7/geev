@@ -39,6 +39,9 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAK3IM"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 }
               ]
@@ -59,6 +62,9 @@
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
+                },
+                {
+                  "u32": 0
                 },
                 {
                   "u64": "42"
@@ -83,6 +89,9 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAOLZM"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 }
               ]
@@ -103,6 +112,9 @@
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAARQG5"
+                },
+                {
+                  "u32": 0
                 },
                 {
                   "u64": "42"
@@ -127,6 +139,9 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAATYON"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 }
               ]
@@ -147,6 +162,9 @@
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAVAX5"
+                },
+                {
+                  "u32": 0
                 },
                 {
                   "u64": "42"
@@ -171,6 +189,9 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAXI7N"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 }
               ]
@@ -191,6 +212,9 @@
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAYRE5"
+                },
+                {
+                  "u32": 0
                 },
                 {
                   "u64": "42"
@@ -215,6 +239,9 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2ZMN"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 }
               ]
@@ -236,6 +263,9 @@
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4BV5"
+                },
+                {
+                  "u32": 0
                 },
                 {
                   "u64": "42"
@@ -330,6 +360,9 @@
                   "symbol": "FlagCount"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 }
               ]
@@ -348,6 +381,9 @@
                   "vec": [
                     {
                       "symbol": "FlagCount"
+                    },
+                    {
+                      "u32": 0
                     },
                     {
                       "u64": "42"
@@ -375,6 +411,9 @@
                   "symbol": "FlagRecord"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 },
                 {
@@ -396,6 +435,9 @@
                   "vec": [
                     {
                       "symbol": "FlagRecord"
+                    },
+                    {
+                      "u32": 0
                     },
                     {
                       "u64": "42"
@@ -426,6 +468,9 @@
                   "symbol": "FlagRecord"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 },
                 {
@@ -447,6 +492,9 @@
                   "vec": [
                     {
                       "symbol": "FlagRecord"
+                    },
+                    {
+                      "u32": 0
                     },
                     {
                       "u64": "42"
@@ -477,6 +525,9 @@
                   "symbol": "FlagRecord"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 },
                 {
@@ -498,6 +549,9 @@
                   "vec": [
                     {
                       "symbol": "FlagRecord"
+                    },
+                    {
+                      "u32": 0
                     },
                     {
                       "u64": "42"
@@ -528,6 +582,9 @@
                   "symbol": "FlagRecord"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 },
                 {
@@ -549,6 +606,9 @@
                   "vec": [
                     {
                       "symbol": "FlagRecord"
+                    },
+                    {
+                      "u32": 0
                     },
                     {
                       "u64": "42"
@@ -579,6 +639,9 @@
                   "symbol": "FlagRecord"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 },
                 {
@@ -600,6 +663,9 @@
                   "vec": [
                     {
                       "symbol": "FlagRecord"
+                    },
+                    {
+                      "u32": 0
                     },
                     {
                       "u64": "42"
@@ -630,6 +696,9 @@
                   "symbol": "FlagRecord"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 },
                 {
@@ -651,6 +720,9 @@
                   "vec": [
                     {
                       "symbol": "FlagRecord"
+                    },
+                    {
+                      "u32": 0
                     },
                     {
                       "u64": "42"
@@ -681,6 +753,9 @@
                   "symbol": "FlagRecord"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 },
                 {
@@ -702,6 +777,9 @@
                   "vec": [
                     {
                       "symbol": "FlagRecord"
+                    },
+                    {
+                      "u32": 0
                     },
                     {
                       "u64": "42"
@@ -732,6 +810,9 @@
                   "symbol": "FlagRecord"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 },
                 {
@@ -753,6 +834,9 @@
                   "vec": [
                     {
                       "symbol": "FlagRecord"
+                    },
+                    {
+                      "u32": 0
                     },
                     {
                       "u64": "42"
@@ -783,6 +867,9 @@
                   "symbol": "FlagRecord"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 },
                 {
@@ -804,6 +891,9 @@
                   "vec": [
                     {
                       "symbol": "FlagRecord"
+                    },
+                    {
+                      "u32": 0
                     },
                     {
                       "u64": "42"
@@ -834,6 +924,9 @@
                   "symbol": "FlagRecord"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 },
                 {
@@ -855,6 +948,9 @@
                   "vec": [
                     {
                       "symbol": "FlagRecord"
+                    },
+                    {
+                      "u32": 0
                     },
                     {
                       "u64": "42"

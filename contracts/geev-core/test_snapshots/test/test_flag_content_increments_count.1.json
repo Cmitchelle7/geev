@@ -20,6 +20,9 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 }
               ]
@@ -51,6 +54,9 @@
                   "symbol": "FlagCount"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 }
               ]
@@ -69,6 +75,9 @@
                   "vec": [
                     {
                       "symbol": "FlagCount"
+                    },
+                    {
+                      "u32": 0
                     },
                     {
                       "u64": "42"
@@ -96,6 +105,9 @@
                   "symbol": "FlagRecord"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "42"
                 },
                 {
@@ -117,6 +129,9 @@
                   "vec": [
                     {
                       "symbol": "FlagRecord"
+                    },
+                    {
+                      "u32": 0
                     },
                     {
                       "u64": "42"

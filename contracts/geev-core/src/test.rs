@@ -1518,11 +1518,11 @@ fn test_flag_content_increments_count() {
     let user = Address::generate(&env);
     let target_id: u64 = 42;
 
-    assert_eq!(client.get_flag_count(&target_id), 0);
+    assert_eq!(client.get_flag_count(&ContentType::Giveaway, &target_id), 0);
 
-    client.flag_content(&user, &target_id);
+    client.flag_content(&user, &ContentType::Giveaway, &target_id);
 
-    assert_eq!(client.get_flag_count(&target_id), 1);
+    assert_eq!(client.get_flag_count(&ContentType::Giveaway, &target_id), 1);
 }
 
 #[test]
@@ -1537,12 +1537,12 @@ fn test_flag_content_multiple_users() {
     let user_b = Address::generate(&env);
     let target_id: u64 = 7;
 
-    client.flag_content(&user_a, &target_id);
-    client.flag_content(&user_b, &target_id);
+    client.flag_content(&user_a, &ContentType::Giveaway, &target_id);
+    client.flag_content(&user_b, &ContentType::Giveaway, &target_id);
 
-    assert_eq!(client.get_flag_count(&target_id), 2);
-    assert!(client.has_flagged(&user_a, &target_id));
-    assert!(client.has_flagged(&user_b, &target_id));
+    assert_eq!(client.get_flag_count(&ContentType::Giveaway, &target_id), 2);
+    assert!(client.has_flagged(&user_a, &ContentType::Giveaway, &target_id));
+    assert!(client.has_flagged(&user_b, &ContentType::Giveaway, &target_id));
 }
 
 #[test]
@@ -1557,9 +1557,9 @@ fn test_flag_content_duplicate_panics() {
     let user = Address::generate(&env);
     let target_id: u64 = 1;
 
-    client.flag_content(&user, &target_id);
+    client.flag_content(&user, &ContentType::Giveaway, &target_id);
     // Second flag from the same user must panic with AlreadyFlagged
-    client.flag_content(&user, &target_id);
+    client.flag_content(&user, &ContentType::Giveaway, &target_id);
 }
 
 #[test]
@@ -1571,7 +1571,7 @@ fn test_has_flagged_returns_false_before_flag() {
     let client = GovernanceContractClient::new(&env, &contract_id);
 
     let user = Address::generate(&env);
-    assert!(!client.has_flagged(&user, &99u64));
+    assert!(!client.has_flagged(&user, &ContentType::Giveaway, &99u64));
 }
 
 #[test]
@@ -1584,17 +1584,41 @@ fn test_flag_counts_are_independent_per_id() {
 
     let user = Address::generate(&env);
 
-    client.flag_content(&user, &1u64);
+    client.flag_content(&user, &ContentType::Giveaway, &1u64);
 
     // ID 2 should still be at 0
-    assert_eq!(client.get_flag_count(&2u64), 0);
-    assert_eq!(client.get_flag_count(&1u64), 1);
+    assert_eq!(client.get_flag_count(&ContentType::Giveaway, &2u64), 0);
+    assert_eq!(client.get_flag_count(&ContentType::Giveaway, &1u64), 1);
+}
+
+#[test]
+fn test_flags_are_independent_for_content_types_with_same_id() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GovernanceContract, ());
+    let client = GovernanceContractClient::new(&env, &contract_id);
+    let user = Address::generate(&env);
+    let shared_id = 1u64;
+
+    client.flag_content(&user, &ContentType::HelpRequest, &shared_id);
+
+    assert_eq!(
+        client.get_flag_count(&ContentType::HelpRequest, &shared_id),
+        1
+    );
+    assert_eq!(client.get_flag_count(&ContentType::Giveaway, &shared_id), 0);
+    assert!(client.has_flagged(&user, &ContentType::HelpRequest, &shared_id));
+    assert!(!client.has_flagged(&user, &ContentType::Giveaway, &shared_id));
+
+    client.flag_content(&user, &ContentType::Giveaway, &shared_id);
+    assert_eq!(client.get_flag_count(&ContentType::Giveaway, &shared_id), 1);
 }
 
 // ── auto-suspension tests ─────────────────────────────────────────────────────
 
 use crate::governance::FLAG_THRESHOLD;
-use crate::types::{GiveawayStatus, SelectionMethod};
+use crate::types::{ContentType, GiveawayStatus, SelectionMethod};
 
 /// Seed a minimal active Giveaway directly into contract storage.
 fn seed_active_giveaway(env: &Env, contract_id: &Address, giveaway_id: u64, token: &Address) {
@@ -1662,7 +1686,7 @@ fn test_giveaway_suspended_at_threshold() {
     // Flag FLAG_THRESHOLD - 1 times — should still be Active.
     for _ in 0..FLAG_THRESHOLD - 1 {
         let flagger = Address::generate(&env);
-        gov.flag_content(&flagger, &giveaway_id);
+        gov.flag_content(&flagger, &ContentType::Giveaway, &giveaway_id);
     }
     env.as_contract(&contract_id, || {
         let g: Giveaway = env
@@ -1675,7 +1699,7 @@ fn test_giveaway_suspended_at_threshold() {
 
     // The threshold flag suspends it.
     let last_flagger = Address::generate(&env);
-    gov.flag_content(&last_flagger, &giveaway_id);
+    gov.flag_content(&last_flagger, &ContentType::Giveaway, &giveaway_id);
 
     env.as_contract(&contract_id, || {
         let g: Giveaway = env
@@ -1705,7 +1729,7 @@ fn test_help_request_suspended_at_threshold() {
 
     for _ in 0..FLAG_THRESHOLD {
         let flagger = Address::generate(&env);
-        gov.flag_content(&flagger, &request_id);
+        gov.flag_content(&flagger, &ContentType::HelpRequest, &request_id);
     }
 
     env.as_contract(&contract_id, || {
@@ -1716,6 +1740,49 @@ fn test_help_request_suspended_at_threshold() {
             .unwrap();
         assert_eq!(r.status, HelpRequestStatus::Suspended);
     });
+}
+
+#[test]
+fn test_help_request_auto_suspension_does_not_affect_same_id_giveaway() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GovernanceContract, ());
+    let gov = GovernanceContractClient::new(&env, &contract_id);
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+    let shared_id = 1u64;
+
+    seed_active_giveaway(&env, &contract_id, shared_id, &token);
+    seed_open_request(&env, &contract_id, shared_id, &token);
+
+    for _ in 0..FLAG_THRESHOLD {
+        let flagger = Address::generate(&env);
+        gov.flag_content(&flagger, &ContentType::HelpRequest, &shared_id);
+    }
+
+    env.as_contract(&contract_id, || {
+        let giveaway: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(shared_id))
+            .unwrap();
+        let request: HelpRequest = env
+            .storage()
+            .persistent()
+            .get(&DataKey::HelpRequest(shared_id))
+            .unwrap();
+
+        assert_eq!(giveaway.status, GiveawayStatus::Active);
+        assert_eq!(request.status, HelpRequestStatus::Suspended);
+    });
+    assert_eq!(gov.get_flag_count(&ContentType::Giveaway, &shared_id), 0);
+    assert_eq!(
+        gov.get_flag_count(&ContentType::HelpRequest, &shared_id),
+        FLAG_THRESHOLD
+    );
 }
 
 #[test]
@@ -1736,7 +1803,7 @@ fn test_content_auto_suspended_event_emitted() {
 
     for _ in 0..FLAG_THRESHOLD {
         let flagger = Address::generate(&env);
-        gov.flag_content(&flagger, &giveaway_id);
+        gov.flag_content(&flagger, &ContentType::Giveaway, &giveaway_id);
     }
 
     // Verify ContentAutoSuspended event was emitted with the right topic.
@@ -1744,6 +1811,7 @@ fn test_content_auto_suspended_event_emitted() {
     let expected_topics: soroban_sdk::Vec<Val> = vec![
         &env,
         Symbol::new(&env, "content_auto_suspended").into_val(&env),
+        ContentType::Giveaway.into_val(&env),
         giveaway_id.into_val(&env),
     ];
     assert!(events

@@ -19,6 +19,9 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFCT4"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "7"
                 }
               ]
@@ -39,6 +42,9 @@
               "args": [
                 {
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHK3M"
+                },
+                {
+                  "u32": 0
                 },
                 {
                   "u64": "7"
@@ -74,6 +80,9 @@
                   "symbol": "FlagCount"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "7"
                 }
               ]
@@ -92,6 +101,9 @@
                   "vec": [
                     {
                       "symbol": "FlagCount"
+                    },
+                    {
+                      "u32": 0
                     },
                     {
                       "u64": "7"
@@ -119,6 +131,9 @@
                   "symbol": "FlagRecord"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "7"
                 },
                 {
@@ -140,6 +155,9 @@
                   "vec": [
                     {
                       "symbol": "FlagRecord"
+                    },
+                    {
+                      "u32": 0
                     },
                     {
                       "u64": "7"
@@ -170,6 +188,9 @@
                   "symbol": "FlagRecord"
                 },
                 {
+                  "u32": 0
+                },
+                {
                   "u64": "7"
                 },
                 {
@@ -191,6 +212,9 @@
                   "vec": [
                     {
                       "symbol": "FlagRecord"
+                    },
+                    {
+                      "u32": 0
                     },
                     {
                       "u64": "7"
