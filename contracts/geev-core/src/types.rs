@@ -17,6 +17,7 @@ pub enum Error {
     InsufficientParticipants = 11,
     HelpRequestNotFound = 12,
     HelpRequestAlreadyFullyFunded = 13,
+    HelpRequestExpired = 30,
     InvalidDonationAmount = 14,
     AlreadyInitialized = 15,
     ArithmeticOverflow = 16,
@@ -115,6 +116,8 @@ pub struct HelpRequest {
     pub raised_amount: i128,
     pub status: HelpRequestStatus,
     pub is_verified: bool,
+    pub created_at: u64,
+    pub expires_at: Option<u64>,
 }
 
 #[derive(Clone)]
