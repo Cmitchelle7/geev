@@ -4,7 +4,9 @@ use crate::giveaway::{GiveawayContract, GiveawayContractClient};
 use crate::governance::{GovernanceContract, GovernanceContractClient};
 use crate::mutual_aid::{MutualAidContract, MutualAidContractClient};
 use crate::profile::{ProfileContract, ProfileContractClient};
-use crate::types::{DataKey, Giveaway, HelpRequest, HelpRequestStatus, ParticipantVerification};
+use crate::types::{
+    DataKey, Error, Giveaway, HelpRequest, HelpRequestStatus, ParticipantVerification,
+};
 use soroban_sdk::symbol_short;
 use soroban_sdk::{
     testutils::{Address as _, Events as _, Ledger},
@@ -2855,4 +2857,338 @@ fn test_partial_claim_recovery() {
             .unwrap();
         assert_eq!(giveaway.status, GiveawayStatus::Completed);
     });
+}
+
+// ── mutual aid creator claim tests ────────────────────────────────────────
+
+/// A `panic_with_error!` reaches a `try_*` client as an encoded contract error,
+/// so expected failures are compared against the encoded form of the variant.
+fn contract_error(error: Error) -> soroban_sdk::Error {
+    soroban_sdk::Error::from_contract_error(error as u32)
+}
+
+/// Register the mutual-aid contract against a real token, then post and fully
+/// fund a help request. Returns `(contract_id, client, token, creator, request_id)`.
+fn setup_funded_request(
+    env: &Env,
+) -> (Address, MutualAidContractClient<'_>, Address, Address, u64) {
+    let contract_id = env.register(MutualAidContract, ());
+    let client = MutualAidContractClient::new(env, &contract_id);
+
+    let token_admin = Address::generate(env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+
+    let creator = Address::generate(env);
+    let donor = Address::generate(env);
+    token::StellarAssetClient::new(env, &token).mint(&donor, &1000);
+
+    let request_id = client.post_help_request(&creator, &1, &1000, &token);
+    client.donate(&donor, &request_id, &1000);
+
+    (contract_id, client, token, creator, request_id)
+}
+
+/// Overwrite a help request's raised amount and status, to reach states that no
+/// public entry point produces yet (e.g. a dispute resolved in either direction).
+fn force_request_state(
+    env: &Env,
+    contract_id: &Address,
+    request_id: u64,
+    token: &Address,
+    creator: &Address,
+    raised_amount: i128,
+    status: HelpRequestStatus,
+) {
+    let request = HelpRequest {
+        id: request_id,
+        creator: creator.clone(),
+        token: token.clone(),
+        goal: 1000,
+        raised_amount,
+        status,
+        is_verified: false,
+    };
+    env.as_contract(contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::HelpRequest(request_id), &request);
+    });
+}
+
+#[test]
+fn test_creator_claims_fully_funded_request() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, client, token, creator, request_id) = setup_funded_request(&env);
+    let token_client = token::Client::new(&env, &token);
+
+    assert_eq!(token_client.balance(&contract_id), 1000);
+    assert_eq!(token_client.balance(&creator), 0);
+
+    client.claim_help_request_funds(&creator, &request_id);
+
+    // The whole escrow reaches the creator: mutual aid takes no protocol fee.
+    assert_eq!(token_client.balance(&creator), 1000);
+    assert_eq!(token_client.balance(&contract_id), 0);
+
+    let request = client.get_request(&request_id).unwrap();
+    assert_eq!(request.status, HelpRequestStatus::Closed);
+    assert_eq!(request.raised_amount, 1000);
+
+    env.as_contract(&contract_id, || {
+        let claimed: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::HelpRequestClaimed(request_id))
+            .unwrap();
+        assert!(claimed);
+    });
+}
+
+#[test]
+fn test_claim_emits_funds_claimed_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, client, _token, creator, request_id) = setup_funded_request(&env);
+
+    client.claim_help_request_funds(&creator, &request_id);
+
+    let events = env.events().all();
+    let expected_topics: soroban_sdk::Vec<Val> = vec![
+        &env,
+        symbol_short!("aid").into_val(&env),
+        symbol_short!("claim").into_val(&env),
+        request_id.into_val(&env),
+    ];
+    assert!(
+        events.iter().any(|(event_contract, topics, data)| {
+            if event_contract != contract_id || topics != expected_topics.into_val(&env) {
+                return false;
+            }
+            let data_vec: soroban_sdk::Vec<Val> = soroban_sdk::Vec::from_val(&env, &data);
+            let actual_creator = Address::from_val(&env, &data_vec.get(0).unwrap());
+            let actual_amount = i128::from_val(&env, &data_vec.get(1).unwrap());
+            actual_creator == creator && actual_amount == 1000
+        }),
+        "HelpRequestFundsClaimed event did not contain the creator and claimed amount"
+    );
+}
+
+#[test]
+fn test_creator_cannot_claim_twice() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, client, token, creator, request_id) = setup_funded_request(&env);
+    let token_client = token::Client::new(&env, &token);
+
+    client.claim_help_request_funds(&creator, &request_id);
+
+    // The payout closes the request, so a repeat withdrawal has no release state.
+    assert_eq!(
+        client.try_claim_help_request_funds(&creator, &request_id),
+        Err(Ok(contract_error(Error::InvalidStatus)))
+    );
+    assert_eq!(token_client.balance(&creator), 1000);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+#[test]
+fn test_claim_record_blocks_second_payout() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, client, token, creator, request_id) = setup_funded_request(&env);
+    let token_client = token::Client::new(&env, &token);
+
+    client.claim_help_request_funds(&creator, &request_id);
+
+    // Force the request back into a release state: the one-shot claim record,
+    // not just the Closed status, is what makes a second payout impossible.
+    force_request_state(
+        &env,
+        &contract_id,
+        request_id,
+        &token,
+        &creator,
+        1000,
+        HelpRequestStatus::FullyFunded,
+    );
+
+    assert_eq!(
+        client.try_claim_help_request_funds(&creator, &request_id),
+        Err(Ok(contract_error(Error::AlreadyClaimed)))
+    );
+    assert_eq!(token_client.balance(&creator), 1000);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+#[test]
+fn test_non_creator_cannot_claim_request_funds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, client, token, creator, request_id) = setup_funded_request(&env);
+    let token_client = token::Client::new(&env, &token);
+    let stranger = Address::generate(&env);
+
+    assert_eq!(
+        client.try_claim_help_request_funds(&stranger, &request_id),
+        Err(Ok(contract_error(Error::NotCreator)))
+    );
+    assert_eq!(token_client.balance(&stranger), 0);
+    assert_eq!(token_client.balance(&creator), 0);
+    assert_eq!(token_client.balance(&contract_id), 1000);
+}
+
+#[test]
+fn test_claim_before_fully_funded_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(MutualAidContract, ());
+    let client = MutualAidContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+    let token_client = token::Client::new(&env, &token);
+
+    let creator = Address::generate(&env);
+    let donor = Address::generate(&env);
+    token::StellarAssetClient::new(&env, &token).mint(&donor, &400);
+
+    let request_id = client.post_help_request(&creator, &1, &1000, &token);
+    client.donate(&donor, &request_id, &400);
+
+    assert_eq!(
+        client.try_claim_help_request_funds(&creator, &request_id),
+        Err(Ok(contract_error(Error::InvalidStatus)))
+    );
+    assert_eq!(token_client.balance(&creator), 0);
+    assert_eq!(token_client.balance(&contract_id), 400);
+}
+
+#[test]
+fn test_claim_cancelled_request_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(MutualAidContract, ());
+    let client = MutualAidContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+
+    let creator = Address::generate(&env);
+    let request_id: u64 = 7;
+    force_request_state(
+        &env,
+        &contract_id,
+        request_id,
+        &token,
+        &creator,
+        500,
+        HelpRequestStatus::Cancelled,
+    );
+
+    // Cancelled escrow belongs to the donors, who reclaim it via claim_refund.
+    assert_eq!(
+        client.try_claim_help_request_funds(&creator, &request_id),
+        Err(Ok(contract_error(Error::InvalidStatus)))
+    );
+}
+
+#[test]
+fn test_claim_missing_request_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(MutualAidContract, ());
+    let client = MutualAidContractClient::new(&env, &contract_id);
+    let creator = Address::generate(&env);
+
+    assert_eq!(
+        client.try_claim_help_request_funds(&creator, &404),
+        Err(Ok(contract_error(Error::HelpRequestNotFound)))
+    );
+}
+
+#[test]
+fn test_claim_after_dispute_resolved_release() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, client, token, creator, request_id) = setup_funded_request(&env);
+    let token_client = token::Client::new(&env, &token);
+
+    // A dispute settled in the creator's favour is the other documented release
+    // state, so it must allow a withdrawal too.
+    force_request_state(
+        &env,
+        &contract_id,
+        request_id,
+        &token,
+        &creator,
+        1000,
+        HelpRequestStatus::ResolvedRelease,
+    );
+
+    client.claim_help_request_funds(&creator, &request_id);
+
+    assert_eq!(token_client.balance(&creator), 1000);
+    assert_eq!(token_client.balance(&contract_id), 0);
+    assert_eq!(
+        client.get_request(&request_id).unwrap().status,
+        HelpRequestStatus::Closed
+    );
+}
+
+#[test]
+fn test_donate_to_closed_request_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, client, token, creator, request_id) = setup_funded_request(&env);
+    let token_client = token::Client::new(&env, &token);
+
+    client.claim_help_request_funds(&creator, &request_id);
+
+    let late_donor = Address::generate(&env);
+    token::StellarAssetClient::new(&env, &token).mint(&late_donor, &100);
+
+    // A donation to a paid out request could never be released or refunded.
+    assert_eq!(
+        client.try_donate(&late_donor, &request_id, &100),
+        Err(Ok(contract_error(Error::InvalidStatus)))
+    );
+    assert_eq!(token_client.balance(&late_donor), 100);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+#[test]
+fn test_no_refund_path_after_creator_claim() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (contract_id, client, token, creator, request_id) = setup_funded_request(&env);
+    let token_client = token::Client::new(&env, &token);
+
+    client.claim_help_request_funds(&creator, &request_id);
+
+    // Refunds need a Cancelled request and cancelling needs an Open one, so a
+    // paid out request cannot be turned back into refundable escrow.
+    assert_eq!(
+        client.try_cancel_request(&creator, &request_id),
+        Err(Ok(contract_error(Error::InvalidStatus)))
+    );
+    assert_eq!(token_client.balance(&creator), 1000);
+    assert_eq!(token_client.balance(&contract_id), 0);
 }

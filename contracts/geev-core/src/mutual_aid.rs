@@ -1,4 +1,5 @@
 use crate::types::{DataKey, Error, HelpRequest, HelpRequestStatus};
+use crate::utils::with_reentrancy_guard;
 use soroban_sdk::{contract, contractevent, contractimpl, panic_with_error, token, Address, Env};
 
 #[contract]
@@ -33,6 +34,16 @@ pub struct RefundClaimed {
 pub struct RequestCancelled {
     request_id: u64,
     creator: Address,
+}
+
+/// Emitted after a creator withdraws the funds raised by their request. Topics are
+/// `aid`, `claim`, and `request_id`; data is `[creator, amount]`.
+#[contractevent(topics = ["aid", "claim"], data_format = "vec")]
+pub struct HelpRequestFundsClaimed {
+    #[topic]
+    request_id: u64,
+    creator: Address,
+    amount: i128,
 }
 
 #[contractimpl]
@@ -101,8 +112,11 @@ impl MutualAidContract {
             panic_with_error!(&env, Error::HelpRequestAlreadyFullyFunded);
         }
 
+        // `Closed` is terminal: the creator has already withdrawn the escrow, so a
+        // later donation could never be paid out or refunded.
         if request.status == HelpRequestStatus::Cancelled
             || request.status == HelpRequestStatus::Suspended
+            || request.status == HelpRequestStatus::Closed
         {
             panic_with_error!(&env, Error::InvalidStatus);
         }
@@ -173,6 +187,68 @@ impl MutualAidContract {
             amount,
         }
         .publish(&env);
+    }
+
+    /// Withdraw the escrowed donations of a funded help request to its creator.
+    ///
+    /// Only the request creator may call this, and only from a release state:
+    /// `FullyFunded`, or `ResolvedRelease` once a dispute has been settled in the
+    /// creator's favour. The whole `raised_amount` is paid out — mutual aid carries
+    /// no protocol fee, unlike giveaway prizes.
+    ///
+    /// The request moves to `Closed` and a one-shot claim record is written, so the
+    /// payout cannot be repeated.
+    pub fn claim_help_request_funds(env: Env, creator: Address, request_id: u64) {
+        creator.require_auth();
+
+        with_reentrancy_guard(&env, || {
+            let request_key = DataKey::HelpRequest(request_id);
+            let mut request: HelpRequest = env
+                .storage()
+                .persistent()
+                .get(&request_key)
+                .unwrap_or_else(|| panic_with_error!(&env, Error::HelpRequestNotFound));
+
+            if request.creator != creator {
+                panic_with_error!(&env, Error::NotCreator);
+            }
+
+            if request.status != HelpRequestStatus::FullyFunded
+                && request.status != HelpRequestStatus::ResolvedRelease
+            {
+                panic_with_error!(&env, Error::InvalidStatus);
+            }
+
+            let claimed_key = DataKey::HelpRequestClaimed(request_id);
+            let already_claimed: bool = env
+                .storage()
+                .persistent()
+                .get(&claimed_key)
+                .unwrap_or(false);
+            if already_claimed {
+                panic_with_error!(&env, Error::AlreadyClaimed);
+            }
+
+            let amount = request.raised_amount;
+            if amount <= 0 {
+                panic_with_error!(&env, Error::InvalidDonationAmount);
+            }
+
+            let token_client = token::Client::new(&env, &request.token);
+            token_client.transfer(&env.current_contract_address(), &creator, &amount);
+
+            env.storage().persistent().set(&claimed_key, &true);
+
+            request.status = HelpRequestStatus::Closed;
+            env.storage().persistent().set(&request_key, &request);
+
+            HelpRequestFundsClaimed {
+                request_id,
+                creator,
+                amount,
+            }
+            .publish(&env);
+        })
     }
 
     pub fn cancel_request(env: Env, creator: Address, request_id: u64) {
