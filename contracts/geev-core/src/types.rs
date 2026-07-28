@@ -151,7 +151,8 @@ pub enum DataKey {
     DisputeRaisedAt(u64),          // timestamp when dispute was raised
     DisputeRaisedBy(u64, Address), // who raised the dispute
     // ─── Claim Lifecycle Tracking ──────────────────────────────────────────
-    Claimed(u64, Address), // whether a given winner has claimed their share
+    Claimed(u64, Address),   // whether a given winner has claimed their share
+    HelpRequestClaimed(u64), // whether a help request's raised funds have been withdrawn
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
