@@ -1,4 +1,4 @@
-use crate::types::{DataKey, Error, GiveawayStatus, HelpRequestStatus};
+use crate::types::{ContentType, DataKey, Error, GiveawayStatus, HelpRequestStatus};
 use soroban_sdk::{contract, contractevent, contractimpl, Address, Env};
 
 /// Number of flags required to automatically suspend content.
@@ -10,6 +10,8 @@ pub struct GovernanceContract;
 #[contractevent]
 pub struct ContentFlagged {
     #[topic]
+    content_type: ContentType,
+    #[topic]
     target_id: u64,
     user: Address,
     count: u32,
@@ -17,6 +19,8 @@ pub struct ContentFlagged {
 
 #[contractevent]
 pub struct ContentAutoSuspended {
+    #[topic]
+    content_type: ContentType,
     #[topic]
     target_id: u64,
     count: u32,
@@ -31,14 +35,19 @@ pub struct ContentAppealed {
 
 #[contractimpl]
 impl GovernanceContract {
-    /// Flag a piece of content (Giveaway or HelpRequest) by its ID.
-    /// Each user may only flag a given ID once.
-    pub fn flag_content(env: Env, user: Address, target_id: u64) -> Result<(), Error> {
+    /// Flag a specific Giveaway or HelpRequest by its type and ID.
+    /// Each user may only flag a given content item once.
+    pub fn flag_content(
+        env: Env,
+        user: Address,
+        content_type: ContentType,
+        target_id: u64,
+    ) -> Result<(), Error> {
         // 1. Verify caller signature
         user.require_auth();
 
         // 2. Prevent duplicate flags from the same user
-        let flag_key = DataKey::FlagRecord(target_id, user.clone());
+        let flag_key = DataKey::FlagRecord(content_type, target_id, user.clone());
         if env.storage().persistent().has(&flag_key) {
             return Err(Error::AlreadyFlagged);
         }
@@ -47,13 +56,14 @@ impl GovernanceContract {
         env.storage().persistent().set(&flag_key, &true);
 
         // 4. Increment the total flag count for this ID
-        let count_key = DataKey::FlagCount(target_id);
+        let count_key = DataKey::FlagCount(content_type, target_id);
         let current: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
         let new_count = current.checked_add(1).ok_or(Error::ArithmeticOverflow)?;
         env.storage().persistent().set(&count_key, &new_count);
 
         // 5. Emit "ContentFlagged" event: topics = (name, target_id), data = (user, total_flags)
         ContentFlagged {
+            content_type,
             target_id,
             user,
             count: new_count,
@@ -62,7 +72,7 @@ impl GovernanceContract {
 
         // 5. Circuit breaker: suspend if threshold is reached.
         if new_count >= FLAG_THRESHOLD {
-            Self::auto_suspend(&env, target_id, new_count);
+            Self::auto_suspend(&env, content_type, target_id, new_count);
         }
 
         Ok(())
@@ -119,61 +129,72 @@ impl GovernanceContract {
         Err(Error::GiveawayNotFound)
     }
 
-    /// Returns the total number of flags for a given content ID.
-    pub fn get_flag_count(env: Env, target_id: u64) -> u32 {
+    /// Returns the total number of flags for a specific content item.
+    pub fn get_flag_count(env: Env, content_type: ContentType, target_id: u64) -> u32 {
         env.storage()
             .persistent()
-            .get(&DataKey::FlagCount(target_id))
+            .get(&DataKey::FlagCount(content_type, target_id))
             .unwrap_or(0)
     }
 
-    /// Returns whether a specific user has already flagged a given content ID.
-    pub fn has_flagged(env: Env, user: Address, target_id: u64) -> bool {
+    /// Returns whether a user has already flagged a specific content item.
+    pub fn has_flagged(env: Env, user: Address, content_type: ContentType, target_id: u64) -> bool {
         env.storage()
             .persistent()
-            .has(&DataKey::FlagRecord(target_id, user))
+            .has(&DataKey::FlagRecord(content_type, target_id, user))
     }
 
     // ── internal ──────────────────────────────────────────────────────────────
 
-    /// Try to suspend the Giveaway or HelpRequest with `target_id`.
-    /// Silently skips if neither exists (the ID may belong to a future content type).
-    fn auto_suspend(env: &Env, target_id: u64, count: u32) {
-        let giveaway_key = DataKey::Giveaway(target_id);
-        let request_key = DataKey::HelpRequest(target_id);
-
-        let mut suspended = false;
-
-        // Try Giveaway first.
-        if let Some(mut giveaway) = env
-            .storage()
-            .persistent()
-            .get::<DataKey, crate::types::Giveaway>(&giveaway_key)
-        {
-            if giveaway.status == GiveawayStatus::Active {
-                giveaway.status = GiveawayStatus::Suspended;
-                env.storage().persistent().set(&giveaway_key, &giveaway);
-                suspended = true;
-            }
-        }
-
-        // Try HelpRequest if giveaway wasn't found/suspended.
-        if !suspended {
-            if let Some(mut request) = env
-                .storage()
-                .persistent()
-                .get::<DataKey, crate::types::HelpRequest>(&request_key)
-            {
-                if request.status == HelpRequestStatus::Open {
-                    request.status = HelpRequestStatus::Suspended;
-                    env.storage().persistent().set(&request_key, &request);
-                    suspended = true;
+    /// Try to suspend the content item identified by both type and ID.
+    /// Silently skips if the intended item does not exist or is not active.
+    fn auto_suspend(env: &Env, content_type: ContentType, target_id: u64, count: u32) {
+        let suspended = match content_type {
+            ContentType::Giveaway => {
+                let key = DataKey::Giveaway(target_id);
+                if let Some(mut giveaway) = env
+                    .storage()
+                    .persistent()
+                    .get::<DataKey, crate::types::Giveaway>(&key)
+                {
+                    if giveaway.status == GiveawayStatus::Active {
+                        giveaway.status = GiveawayStatus::Suspended;
+                        env.storage().persistent().set(&key, &giveaway);
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
                 }
             }
-        }
+            ContentType::HelpRequest => {
+                let key = DataKey::HelpRequest(target_id);
+                if let Some(mut request) = env
+                    .storage()
+                    .persistent()
+                    .get::<DataKey, crate::types::HelpRequest>(&key)
+                {
+                    if request.status == HelpRequestStatus::Open {
+                        request.status = HelpRequestStatus::Suspended;
+                        env.storage().persistent().set(&key, &request);
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            }
+        };
 
         if suspended {
-            ContentAutoSuspended { target_id, count }.publish(env);
+            ContentAutoSuspended {
+                content_type,
+                target_id,
+                count,
+            }
+            .publish(env);
         }
     }
 }

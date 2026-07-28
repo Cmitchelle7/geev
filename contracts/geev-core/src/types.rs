@@ -106,6 +106,13 @@ pub enum HelpRequestStatus {
     UnderAppeal = 8,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[contracttype]
+pub enum ContentType {
+    Giveaway = 0,
+    HelpRequest = 1,
+}
+
 #[derive(Clone)]
 #[contracttype]
 pub struct HelpRequest {
@@ -137,8 +144,8 @@ pub enum DataKey {
     AllowedToken(Address),
     Profile(Address),
     Username(String),
-    FlagRecord(u64, Address),
-    FlagCount(u64),
+    FlagRecord(ContentType, u64, Address),
+    FlagCount(ContentType, u64),
     Reputation(Address),
     // ─── Dispute Tracking ──────────────────────────────────────────────────
     DisputeRaisedAt(u64),          // timestamp when dispute was raised
