@@ -1,6 +1,8 @@
 use crate::types::{DataKey, Error, HelpRequest, HelpRequestStatus};
 use soroban_sdk::{contract, contractevent, contractimpl, panic_with_error, token, Address, Env};
 
+const HELP_REQUEST_EXPIRY_SECONDS: u64 = 30 * 24 * 60 * 60;
+
 #[contract]
 pub struct MutualAidContract;
 
@@ -61,6 +63,7 @@ impl MutualAidContract {
             panic_with_error!(&env, Error::HelpRequestAlreadyExists);
         }
 
+        let created_at = env.ledger().timestamp();
         let request = HelpRequest {
             id: request_id,
             creator: creator.clone(),
@@ -69,6 +72,8 @@ impl MutualAidContract {
             raised_amount: 0,
             status: HelpRequestStatus::Open,
             is_verified: false,
+            created_at,
+            expires_at: Some(created_at + HELP_REQUEST_EXPIRY_SECONDS),
         };
 
         env.storage().persistent().set(&request_key, &request);
@@ -105,6 +110,12 @@ impl MutualAidContract {
             || request.status == HelpRequestStatus::Suspended
         {
             panic_with_error!(&env, Error::InvalidStatus);
+        }
+
+        if let Some(expires_at) = request.expires_at {
+            if env.ledger().timestamp() > expires_at {
+                panic_with_error!(&env, Error::HelpRequestExpired);
+            }
         }
 
         let token_client = token::Client::new(&env, &request.token);

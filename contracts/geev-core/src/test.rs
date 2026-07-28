@@ -601,6 +601,7 @@ fn test_donation_to_fully_funded_request_fails() {
     let goal = 500;
 
     env.as_contract(&contract_id, || {
+        let now = env.ledger().timestamp();
         let request = HelpRequest {
             id: request_id,
             creator: creator.clone(),
@@ -609,6 +610,8 @@ fn test_donation_to_fully_funded_request_fails() {
             raised_amount: goal,
             status: HelpRequestStatus::FullyFunded,
             is_verified: false,
+            created_at: now,
+            expires_at: Some(now + 30 * 24 * 60 * 60),
         };
         env.storage()
             .persistent()
@@ -1374,6 +1377,7 @@ fn test_toggle_request_verification() {
 
     // Seed a help request with is_verified = false
     env.as_contract(&contract_id, || {
+        let now = env.ledger().timestamp();
         let request = HelpRequest {
             id: request_id,
             creator: creator.clone(),
@@ -1382,6 +1386,8 @@ fn test_toggle_request_verification() {
             raised_amount: 0,
             status: HelpRequestStatus::Open,
             is_verified: false,
+            created_at: now,
+            expires_at: Some(now + 30 * 24 * 60 * 60),
         };
         env.storage()
             .persistent()
@@ -1626,6 +1632,7 @@ fn seed_active_giveaway(env: &Env, contract_id: &Address, giveaway_id: u64, toke
 /// Seed a minimal open HelpRequest directly into contract storage.
 fn seed_open_request(env: &Env, contract_id: &Address, request_id: u64, token: &Address) {
     let creator = Address::generate(env);
+    let now = env.ledger().timestamp();
     let request = HelpRequest {
         id: request_id,
         creator,
@@ -1634,6 +1641,8 @@ fn seed_open_request(env: &Env, contract_id: &Address, request_id: u64, token: &
         raised_amount: 0,
         status: HelpRequestStatus::Open,
         is_verified: false,
+        created_at: now,
+        expires_at: Some(now + 30 * 24 * 60 * 60),
     };
     env.as_contract(contract_id, || {
         env.storage()
@@ -1819,6 +1828,7 @@ fn test_donate_to_suspended_request_fails() {
     let request_id: u64 = 5;
     let creator = Address::generate(&env);
     env.as_contract(&contract_id, || {
+        let now = env.ledger().timestamp();
         env.storage().persistent().set(
             &DataKey::HelpRequest(request_id),
             &HelpRequest {
@@ -1829,6 +1839,8 @@ fn test_donate_to_suspended_request_fails() {
                 raised_amount: 0,
                 status: HelpRequestStatus::Suspended,
                 is_verified: false,
+                created_at: now,
+                expires_at: Some(now + 30 * 24 * 60 * 60),
             },
         );
     });
