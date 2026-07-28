@@ -408,6 +408,7 @@ fn test_donation_flow() {
     let donation2 = 700;
 
     env.as_contract(&contract_id, || {
+        let now = env.ledger().timestamp();
         let request = HelpRequest {
             id: request_id,
             creator: creator.clone(),
@@ -416,6 +417,8 @@ fn test_donation_flow() {
             raised_amount: 0,
             status: HelpRequestStatus::Open,
             is_verified: false,
+            created_at: now,
+            expires_at: Some(now + 30 * 24 * 60 * 60),
         };
         env.storage()
             .persistent()
@@ -471,6 +474,7 @@ fn test_donation_reaches_goal() {
     let donation = 500;
 
     env.as_contract(&contract_id, || {
+        let now = env.ledger().timestamp();
         let request = HelpRequest {
             id: request_id,
             creator: creator.clone(),
@@ -479,6 +483,8 @@ fn test_donation_reaches_goal() {
             raised_amount: 0,
             status: HelpRequestStatus::Open,
             is_verified: false,
+            created_at: now,
+            expires_at: Some(now + 30 * 24 * 60 * 60),
         };
         env.storage()
             .persistent()
@@ -523,6 +529,7 @@ fn test_donation_emits_contributor_tracking_event() {
     let donation = 125;
 
     env.as_contract(&contract_id, || {
+        let now = env.ledger().timestamp();
         let request = HelpRequest {
             id: request_id,
             creator: creator.clone(),
@@ -531,6 +538,8 @@ fn test_donation_emits_contributor_tracking_event() {
             raised_amount: 0,
             status: HelpRequestStatus::Open,
             is_verified: false,
+            created_at: now,
+            expires_at: Some(now + 30 * 24 * 60 * 60),
         };
         env.storage()
             .persistent()
@@ -550,6 +559,54 @@ fn test_donation_emits_contributor_tracking_event() {
     assert!(events.iter().any(|(event_contract, topics, _data)| {
         event_contract == contract_id && topics == expected_topics.into_val(&env)
     }));
+}
+
+#[test]
+#[should_panic]
+fn test_donation_to_expired_request_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(MutualAidContract, ());
+    let contract_client = MutualAidContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let donor = Address::generate(&env);
+
+    token_admin_client.mint(&donor, &1000);
+
+    let request_id: u64 = 99;
+    let goal = 500;
+
+    env.ledger().with_mut(|li| {
+        li.timestamp = 1000;
+    });
+
+    env.as_contract(&contract_id, || {
+        let request = HelpRequest {
+            id: request_id,
+            creator: creator.clone(),
+            token: mock_token.clone(),
+            goal,
+            raised_amount: 0,
+            status: HelpRequestStatus::Open,
+            is_verified: false,
+            created_at: 0,
+            expires_at: Some(100),
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::HelpRequest(request_id), &request);
+    });
+
+    contract_client.donate(&donor, &request_id, &100);
 }
 
 #[test]
@@ -646,6 +703,7 @@ fn test_donation_with_invalid_amount_fails() {
     let goal = 500;
 
     env.as_contract(&contract_id, || {
+        let now = env.ledger().timestamp();
         let request = HelpRequest {
             id: request_id,
             creator: creator.clone(),
@@ -654,6 +712,8 @@ fn test_donation_with_invalid_amount_fails() {
             raised_amount: 0,
             status: HelpRequestStatus::Open,
             is_verified: false,
+            created_at: now,
+            expires_at: Some(now + 30 * 24 * 60 * 60),
         };
         env.storage()
             .persistent()
@@ -922,6 +982,7 @@ fn test_refund_flow() {
     let donation = 500;
 
     env.as_contract(&contract_id, || {
+        let now = env.ledger().timestamp();
         let request = HelpRequest {
             id: request_id,
             creator: creator.clone(),
@@ -930,6 +991,8 @@ fn test_refund_flow() {
             raised_amount: 0,
             status: HelpRequestStatus::Open,
             is_verified: false,
+            created_at: now,
+            expires_at: Some(now + 30 * 24 * 60 * 60),
         };
         env.storage()
             .persistent()
@@ -1465,6 +1528,7 @@ fn test_donate_event_emits_exact_amount_and_total() {
     let goal: i128 = 1000;
 
     env.as_contract(&contract_id, || {
+        let now = env.ledger().timestamp();
         let request = HelpRequest {
             id: request_id,
             creator: creator.clone(),
@@ -1473,6 +1537,8 @@ fn test_donate_event_emits_exact_amount_and_total() {
             raised_amount: 0,
             status: HelpRequestStatus::Open,
             is_verified: false,
+            created_at: now,
+            expires_at: Some(now + 30 * 24 * 60 * 60),
         };
         env.storage()
             .persistent()

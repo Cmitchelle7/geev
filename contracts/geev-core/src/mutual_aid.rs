@@ -204,6 +204,12 @@ impl MutualAidContract {
             panic_with_error!(&env, Error::InvalidStatus);
         }
 
+        if let Some(expires_at) = request.expires_at {
+            if env.ledger().timestamp() > expires_at {
+                panic_with_error!(&env, Error::HelpRequestExpired);
+            }
+        }
+
         request.status = HelpRequestStatus::Cancelled;
         env.storage().persistent().set(&request_key, &request);
 
