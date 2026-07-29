@@ -106,10 +106,10 @@
             "key": {
               "vec": [
                 {
-                  "symbol": "HelpRequest"
+                  "symbol": "Giveaway"
                 },
                 {
-                  "u64": "7"
+                  "u64": "20"
                 }
               ]
             },
@@ -126,10 +126,10 @@
                 "key": {
                   "vec": [
                     {
-                      "symbol": "HelpRequest"
+                      "symbol": "Giveaway"
                     },
                     {
-                      "u64": "7"
+                      "u64": "20"
                     }
                   ]
                 },
@@ -138,10 +138,26 @@
                   "map": [
                     {
                       "key": {
-                        "symbol": "created_at"
+                        "symbol": "amount"
+                      },
+                      "val": {
+                        "i128": "500"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "claim_deadline"
                       },
                       "val": {
                         "u64": "0"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "claimed_count"
+                      },
+                      "val": {
+                        "u32": 0
                       }
                     },
                     {
@@ -154,18 +170,10 @@
                     },
                     {
                       "key": {
-                        "symbol": "expires_at"
+                        "symbol": "end_time"
                       },
                       "val": {
-                        "u64": "2592000"
-                      }
-                    },
-                    {
-                      "key": {
-                        "symbol": "goal"
-                      },
-                      "val": {
-                        "i128": "1000"
+                        "u64": "3600"
                       }
                     },
                     {
@@ -173,23 +181,31 @@
                         "symbol": "id"
                       },
                       "val": {
-                        "u64": "7"
+                        "u64": "20"
                       }
                     },
                     {
                       "key": {
-                        "symbol": "is_verified"
+                        "symbol": "min_reputation"
                       },
                       "val": {
-                        "bool": false
+                        "u64": "0"
                       }
                     },
                     {
                       "key": {
-                        "symbol": "raised_amount"
+                        "symbol": "participant_count"
                       },
                       "val": {
-                        "i128": "500"
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "selection_method"
+                      },
+                      "val": {
+                        "u32": 0
                       }
                     },
                     {
@@ -197,7 +213,15 @@
                         "symbol": "status"
                       },
                       "val": {
-                        "u32": 3
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "title"
+                      },
+                      "val": {
+                        "string": "Appeal Test Giveaway"
                       }
                     },
                     {
@@ -206,6 +230,30 @@
                       },
                       "val": {
                         "address": "CBUSYNQKASUYFWYC3M2GUEDMX4AIVWPALDBYJPNK6554BREHTGZ2IUNF"
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "verification_type"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "winner_count"
+                      },
+                      "val": {
+                        "u32": 1
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "winners"
+                      },
+                      "val": {
+                        "vec": []
                       }
                     }
                   ]
