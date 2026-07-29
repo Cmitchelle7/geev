@@ -3047,6 +3047,7 @@ fn force_request_state(
     raised_amount: i128,
     status: HelpRequestStatus,
 ) {
+    let now = env.ledger().timestamp();
     let request = HelpRequest {
         id: request_id,
         creator: creator.clone(),
@@ -3055,6 +3056,8 @@ fn force_request_state(
         raised_amount,
         status,
         is_verified: false,
+        created_at: now,
+        expires_at: Some(now + 30 * 24 * 60 * 60),
     };
     env.as_contract(contract_id, || {
         env.storage()
@@ -3337,4 +3340,613 @@ fn test_no_refund_path_after_creator_claim() {
     );
     assert_eq!(token_client.balance(&creator), 1000);
     assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+// ── Appeal & restore workflow tests ──────────────────────────────────────────
+//
+// Policy summary (documented here for traceability):
+//   1. Only the content creator may call `file_appeal`.
+//   2. `file_appeal` is only valid when the content is `Suspended`; any other
+//      status returns `InvalidStatus`.
+//   3. Only the admin may call `resolve_appeal`.
+//   4. `resolve_appeal(restore=true)` moves a Giveaway back to `Active` and a
+//      HelpRequest back to `Open`.
+//   5. `resolve_appeal(restore=false)` leaves the content `Suspended`.
+//   6. Flag history is *preserved* after a successful restore – the flag count
+//      is not reset – preventing the same coordinated flags from immediately
+//      re-suspending content.
+//   7. After restore, fresh flags can still reach the threshold and suspend the
+//      content again, provided those come from unique flaggers.
+
+/// Seed an active giveaway whose creator is `creator` (returned so tests can
+/// use it when calling `file_appeal`).
+fn seed_active_giveaway_with_creator(
+    env: &Env,
+    contract_id: &Address,
+    giveaway_id: u64,
+    token: &Address,
+    creator: &Address,
+) {
+    let giveaway = Giveaway {
+        id: giveaway_id,
+        creator: creator.clone(),
+        token: token.clone(),
+        amount: 500,
+        title: String::from_str(env, "Appeal Test Giveaway"),
+        participant_count: 0,
+        end_time: env.ledger().timestamp() + 3600,
+        status: GiveawayStatus::Active,
+        winner_count: 1,
+        winners: Vec::new(env),
+        verification_type: 0,
+        min_reputation: 0,
+        selection_method: SelectionMethod::Random,
+        claim_deadline: 0,
+        claimed_count: 0,
+    };
+    env.as_contract(contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Giveaway(giveaway_id), &giveaway);
+    });
+}
+
+/// Seed an open help-request whose creator is `creator`.
+fn seed_open_request_with_creator(
+    env: &Env,
+    contract_id: &Address,
+    request_id: u64,
+    token: &Address,
+    creator: &Address,
+) {
+    let now = env.ledger().timestamp();
+    let request = HelpRequest {
+        id: request_id,
+        creator: creator.clone(),
+        token: token.clone(),
+        goal: 1000,
+        raised_amount: 0,
+        status: HelpRequestStatus::Open,
+        is_verified: false,
+        created_at: now,
+        expires_at: Some(now + 30 * 24 * 60 * 60),
+    };
+    env.as_contract(contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::HelpRequest(request_id), &request);
+    });
+}
+
+/// Drive a content item to `Suspended` by flagging it FLAG_THRESHOLD times
+/// from unique addresses.
+fn suspend_via_flags(
+    gov: &GovernanceContractClient,
+    env: &Env,
+    content_type: ContentType,
+    target_id: u64,
+) {
+    for _ in 0..FLAG_THRESHOLD {
+        let flagger = Address::generate(env);
+        gov.flag_content(&flagger, &content_type, &target_id);
+    }
+}
+
+// ── 1. Creator can file an appeal on a suspended Giveaway ────────────────────
+
+#[test]
+fn test_file_appeal_giveaway_transitions_to_under_appeal() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GovernanceContract, ());
+    let gov = GovernanceContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+
+    let giveaway_id: u64 = 1;
+    let creator = Address::generate(&env);
+    seed_active_giveaway_with_creator(&env, &contract_id, giveaway_id, &token, &creator);
+
+    // Suspend via coordinated flags.
+    suspend_via_flags(&gov, &env, ContentType::Giveaway, giveaway_id);
+
+    // Creator files the appeal.
+    gov.file_appeal(&creator, &giveaway_id);
+
+    env.as_contract(&contract_id, || {
+        let g: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap();
+        assert_eq!(g.status, GiveawayStatus::UnderAppeal);
+    });
+}
+
+// ── 2. Creator can file an appeal on a suspended HelpRequest ─────────────────
+
+#[test]
+fn test_file_appeal_help_request_transitions_to_under_appeal() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GovernanceContract, ());
+    let gov = GovernanceContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+
+    let request_id: u64 = 2;
+    let creator = Address::generate(&env);
+    seed_open_request_with_creator(&env, &contract_id, request_id, &token, &creator);
+
+    suspend_via_flags(&gov, &env, ContentType::HelpRequest, request_id);
+
+    gov.file_appeal(&creator, &request_id);
+
+    env.as_contract(&contract_id, || {
+        let r: HelpRequest = env
+            .storage()
+            .persistent()
+            .get(&DataKey::HelpRequest(request_id))
+            .unwrap();
+        assert_eq!(r.status, HelpRequestStatus::UnderAppeal);
+    });
+}
+
+// ── 3. Non-creator cannot file an appeal ─────────────────────────────────────
+
+#[test]
+fn test_file_appeal_by_non_creator_returns_not_creator() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GovernanceContract, ());
+    let gov = GovernanceContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+
+    let giveaway_id: u64 = 10;
+    let creator = Address::generate(&env);
+    let impostor = Address::generate(&env);
+    seed_active_giveaway_with_creator(&env, &contract_id, giveaway_id, &token, &creator);
+
+    suspend_via_flags(&gov, &env, ContentType::Giveaway, giveaway_id);
+
+    let result = gov.try_file_appeal(&impostor, &giveaway_id);
+    assert_eq!(result, Err(Ok(Error::NotCreator)));
+}
+
+// ── 4. Appeal on non-suspended content is rejected ───────────────────────────
+
+#[test]
+fn test_file_appeal_on_active_content_returns_invalid_status() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GovernanceContract, ());
+    let gov = GovernanceContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+
+    let giveaway_id: u64 = 20;
+    let creator = Address::generate(&env);
+    // Seed as Active — NOT suspended.
+    seed_active_giveaway_with_creator(&env, &contract_id, giveaway_id, &token, &creator);
+
+    let result = gov.try_file_appeal(&creator, &giveaway_id);
+    assert_eq!(result, Err(Ok(Error::InvalidStatus)));
+}
+
+// ── 5. Admin restores a Giveaway — status returns to Active ──────────────────
+
+#[test]
+fn test_resolve_appeal_restore_true_sets_giveaway_active() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let gov_contract_id = env.register(GovernanceContract, ());
+    let gov = GovernanceContractClient::new(&env, &gov_contract_id);
+
+    let admin_contract_id = env.register(AdminContract, ());
+    let admin_client = AdminContractClient::new(&env, &admin_contract_id);
+
+    let admin = Address::generate(&env);
+    env.as_contract(&admin_contract_id, || {
+        env.storage().instance().set(&DataKey::Admin, &admin);
+    });
+
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+
+    // Seed into the *governance* contract storage (shared namespace).
+    let giveaway_id: u64 = 30;
+    let creator = Address::generate(&env);
+    seed_active_giveaway_with_creator(&env, &gov_contract_id, giveaway_id, &token, &creator);
+
+    // Suspend it.
+    suspend_via_flags(&gov, &env, ContentType::Giveaway, giveaway_id);
+
+    // File appeal using governance contract.
+    gov.file_appeal(&creator, &giveaway_id);
+
+    // Copy the under-appeal record into admin contract storage so resolve_appeal
+    // can find it (contracts share storage only when it's the same contract_id).
+    let giveaway_snapshot: Giveaway = env.as_contract(&gov_contract_id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap()
+    });
+    env.as_contract(&admin_contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::Giveaway(giveaway_id), &giveaway_snapshot);
+    });
+
+    // Admin resolves: restore = true.
+    admin_client.resolve_appeal(&giveaway_id, &true);
+
+    env.as_contract(&admin_contract_id, || {
+        let g: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap();
+        assert_eq!(g.status, GiveawayStatus::Active);
+    });
+}
+
+// ── 6. Admin resolves appeal with restore=false — content stays Suspended ────
+
+#[test]
+fn test_resolve_appeal_restore_false_keeps_giveaway_suspended() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin_contract_id = env.register(AdminContract, ());
+    let admin_client = AdminContractClient::new(&env, &admin_contract_id);
+
+    let admin = Address::generate(&env);
+    env.as_contract(&admin_contract_id, || {
+        env.storage().instance().set(&DataKey::Admin, &admin);
+    });
+
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+
+    // Seed a giveaway directly at UnderAppeal status.
+    let giveaway_id: u64 = 40;
+    let creator = Address::generate(&env);
+    env.as_contract(&admin_contract_id, || {
+        env.storage().persistent().set(
+            &DataKey::Giveaway(giveaway_id),
+            &Giveaway {
+                id: giveaway_id,
+                creator,
+                token,
+                amount: 500,
+                title: String::from_str(&env, "Denied Appeal Giveaway"),
+                participant_count: 0,
+                end_time: env.ledger().timestamp() + 3600,
+                status: GiveawayStatus::UnderAppeal,
+                winner_count: 1,
+                winners: Vec::new(&env),
+                verification_type: 0,
+                min_reputation: 0,
+                selection_method: SelectionMethod::Random,
+                claim_deadline: 0,
+                claimed_count: 0,
+            },
+        );
+    });
+
+    // Admin rejects the appeal.
+    admin_client.resolve_appeal(&giveaway_id, &false);
+
+    env.as_contract(&admin_contract_id, || {
+        let g: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap();
+        assert_eq!(g.status, GiveawayStatus::Suspended);
+    });
+}
+
+// ── 7. Admin restores a HelpRequest — status returns to Open ─────────────────
+
+#[test]
+fn test_resolve_appeal_restore_true_sets_help_request_open() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin_contract_id = env.register(AdminContract, ());
+    let admin_client = AdminContractClient::new(&env, &admin_contract_id);
+
+    let admin = Address::generate(&env);
+    env.as_contract(&admin_contract_id, || {
+        env.storage().instance().set(&DataKey::Admin, &admin);
+    });
+
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+
+    let request_id: u64 = 50;
+    let creator = Address::generate(&env);
+    let now = env.ledger().timestamp();
+    env.as_contract(&admin_contract_id, || {
+        env.storage().persistent().set(
+            &DataKey::HelpRequest(request_id),
+            &HelpRequest {
+                id: request_id,
+                creator,
+                token,
+                goal: 1000,
+                raised_amount: 0,
+                status: HelpRequestStatus::UnderAppeal,
+                is_verified: false,
+                created_at: now,
+                expires_at: Some(now + 30 * 24 * 60 * 60),
+            },
+        );
+    });
+
+    admin_client.resolve_appeal(&request_id, &true);
+
+    env.as_contract(&admin_contract_id, || {
+        let r: HelpRequest = env
+            .storage()
+            .persistent()
+            .get(&DataKey::HelpRequest(request_id))
+            .unwrap();
+        assert_eq!(r.status, HelpRequestStatus::Open);
+    });
+}
+
+// ── 8. Unauthorized user cannot call resolve_appeal ──────────────────────────
+
+#[test]
+#[should_panic]
+fn test_resolve_appeal_by_non_admin_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // Register AdminContract without seeding an admin — check_admin will panic.
+    let contract_id = env.register(AdminContract, ());
+    let client = AdminContractClient::new(&env, &contract_id);
+
+    client.resolve_appeal(&1u64, &true);
+}
+
+// ── 9. Flag history is preserved after restore ───────────────────────────────
+//
+// Policy: flag count is NOT reset on restore.  This prevents an attacker from
+// gaming the system by rapidly re-appealing and being immediately restored to
+// a clean flag-slate.
+
+#[test]
+fn test_flag_count_preserved_after_restore() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let gov_contract_id = env.register(GovernanceContract, ());
+    let gov = GovernanceContractClient::new(&env, &gov_contract_id);
+
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+
+    let giveaway_id: u64 = 60;
+    let creator = Address::generate(&env);
+    seed_active_giveaway_with_creator(&env, &gov_contract_id, giveaway_id, &token, &creator);
+
+    // Suspend via threshold flags.
+    suspend_via_flags(&gov, &env, ContentType::Giveaway, giveaway_id);
+
+    let count_before = gov.get_flag_count(&ContentType::Giveaway, &giveaway_id);
+    assert_eq!(count_before, FLAG_THRESHOLD);
+
+    // File and resolve appeal (simulated in-contract restore).
+    gov.file_appeal(&creator, &giveaway_id);
+
+    // Manually restore status to Active (simulate admin resolve in same storage).
+    env.as_contract(&gov_contract_id, || {
+        let mut g: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap();
+        g.status = GiveawayStatus::Active;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Giveaway(giveaway_id), &g);
+    });
+
+    // Flag count must be unchanged — the restore did NOT clear it.
+    let count_after = gov.get_flag_count(&ContentType::Giveaway, &giveaway_id);
+    assert_eq!(count_after, FLAG_THRESHOLD);
+}
+
+// ── 10. Restored content can be re-flagged and re-suspended ──────────────────
+//
+// After a restore, each unique address that has NOT previously flagged this
+// content can still push the count over the threshold, re-suspending it.
+
+#[test]
+fn test_restored_giveaway_can_be_re_suspended_by_new_flags() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let gov_contract_id = env.register(GovernanceContract, ());
+    let gov = GovernanceContractClient::new(&env, &gov_contract_id);
+
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+
+    let giveaway_id: u64 = 70;
+    let creator = Address::generate(&env);
+    seed_active_giveaway_with_creator(&env, &gov_contract_id, giveaway_id, &token, &creator);
+
+    // First suspension wave.
+    suspend_via_flags(&gov, &env, ContentType::Giveaway, giveaway_id);
+
+    // Creator appeals.
+    gov.file_appeal(&creator, &giveaway_id);
+
+    // Admin restores (direct storage mutation inside governance contract).
+    env.as_contract(&gov_contract_id, || {
+        let mut g: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap();
+        g.status = GiveawayStatus::Active;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Giveaway(giveaway_id), &g);
+    });
+
+    // Verify it's Active after restore.
+    env.as_contract(&gov_contract_id, || {
+        let g: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap();
+        assert_eq!(g.status, GiveawayStatus::Active);
+    });
+
+    // A fresh wave of FLAG_THRESHOLD unique flaggers can re-suspend it.
+    for _ in 0..FLAG_THRESHOLD {
+        let new_flagger = Address::generate(&env);
+        gov.flag_content(&new_flagger, &ContentType::Giveaway, &giveaway_id);
+    }
+
+    env.as_contract(&gov_contract_id, || {
+        let g: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap();
+        assert_eq!(g.status, GiveawayStatus::Suspended);
+    });
+}
+
+// ── 11. AppealResolved event is emitted on resolve ───────────────────────────
+
+#[test]
+fn test_resolve_appeal_emits_appeal_resolved_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(AdminContract, ());
+    let client = AdminContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        env.storage().instance().set(&DataKey::Admin, &admin);
+    });
+
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+
+    let giveaway_id: u64 = 80;
+    let creator = Address::generate(&env);
+    env.as_contract(&contract_id, || {
+        env.storage().persistent().set(
+            &DataKey::Giveaway(giveaway_id),
+            &Giveaway {
+                id: giveaway_id,
+                creator,
+                token,
+                amount: 500,
+                title: String::from_str(&env, "Event Test Giveaway"),
+                participant_count: 0,
+                end_time: env.ledger().timestamp() + 3600,
+                status: GiveawayStatus::UnderAppeal,
+                winner_count: 1,
+                winners: Vec::new(&env),
+                verification_type: 0,
+                min_reputation: 0,
+                selection_method: SelectionMethod::Random,
+                claim_deadline: 0,
+                claimed_count: 0,
+            },
+        );
+    });
+
+    client.resolve_appeal(&giveaway_id, &true);
+
+    let events = env.events().all();
+    let expected_topics: soroban_sdk::Vec<Val> = vec![
+        &env,
+        Symbol::new(&env, "appeal_resolved").into_val(&env),
+        giveaway_id.into_val(&env),
+    ];
+    assert!(
+        events
+            .iter()
+            .any(|(ec, topics, _)| ec == contract_id && topics == expected_topics.into_val(&env)),
+        "AppealResolved event was not emitted"
+    );
+}
+
+// ── 12. ContentAppealed event is emitted when creator files appeal ────────────
+
+#[test]
+fn test_file_appeal_emits_content_appealed_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GovernanceContract, ());
+    let gov = GovernanceContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin)
+        .address();
+
+    let giveaway_id: u64 = 90;
+    let creator = Address::generate(&env);
+    seed_active_giveaway_with_creator(&env, &contract_id, giveaway_id, &token, &creator);
+
+    suspend_via_flags(&gov, &env, ContentType::Giveaway, giveaway_id);
+    gov.file_appeal(&creator, &giveaway_id);
+
+    let events = env.events().all();
+    let expected_topics: soroban_sdk::Vec<Val> = vec![
+        &env,
+        Symbol::new(&env, "content_appealed").into_val(&env),
+        giveaway_id.into_val(&env),
+    ];
+    assert!(
+        events
+            .iter()
+            .any(|(ec, topics, _)| ec == contract_id && topics == expected_topics.into_val(&env)),
+        "ContentAppealed event was not emitted"
+    );
 }
