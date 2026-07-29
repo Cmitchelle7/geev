@@ -84,6 +84,111 @@ fn test_giveaway_flow() {
 }
 
 #[test]
+fn test_creator_cancels_empty_giveaway_and_recovers_escrow() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let client = GiveawayContractClient::new(&env, &contract_id);
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = token::Client::new(&env, &token);
+    let creator = Address::generate(&env);
+    token::StellarAssetClient::new(&env, &token).mint(&creator, &500);
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(token.clone()), &true);
+    });
+
+    let giveaway_id = client.create_giveaway(
+        &creator,
+        &token,
+        &500,
+        &String::from_str(&env, "Cancelled giveaway"),
+        &60,
+        &1,
+        &None,
+    );
+    client.cancel_giveaway(&creator, &giveaway_id);
+
+    assert_eq!(token_client.balance(&creator), 500);
+    assert_eq!(token_client.balance(&contract_id), 0);
+    let giveaway: Giveaway = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap()
+    });
+    assert_eq!(giveaway.status, crate::types::GiveawayStatus::Cancelled);
+
+    let participant = Address::generate(&env);
+    assert_eq!(
+        client.try_enter_giveaway(&participant, &giveaway_id),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            Error::InvalidStatus as u32
+        )))
+    );
+    assert_eq!(
+        client.try_pick_winner(&giveaway_id),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            Error::InvalidStatus as u32
+        )))
+    );
+}
+
+#[test]
+fn test_giveaway_cancellation_rejects_non_creator_and_existing_entries() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let client = GiveawayContractClient::new(&env, &contract_id);
+    let token_admin = Address::generate(&env);
+    let token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = token::Client::new(&env, &token);
+    let creator = Address::generate(&env);
+    let participant = Address::generate(&env);
+    let impostor = Address::generate(&env);
+    token::StellarAssetClient::new(&env, &token).mint(&creator, &500);
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(token.clone()), &true);
+    });
+
+    let giveaway_id = client.create_giveaway(
+        &creator,
+        &token,
+        &500,
+        &String::from_str(&env, "Active giveaway"),
+        &60,
+        &1,
+        &None,
+    );
+    assert_eq!(
+        client.try_cancel_giveaway(&impostor, &giveaway_id),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            Error::NotCreator as u32
+        )))
+    );
+
+    client.enter_giveaway(&participant, &giveaway_id);
+    assert_eq!(
+        client.try_cancel_giveaway(&creator, &giveaway_id),
+        Err(Ok(soroban_sdk::Error::from_contract_error(
+            Error::InvalidStatus as u32
+        )))
+    );
+    assert_eq!(token_client.balance(&creator), 0);
+    assert_eq!(token_client.balance(&contract_id), 500);
+}
+
+#[test]
 #[should_panic]
 fn test_allowlist_rejects_unverified_participant() {
     let env = Env::default();

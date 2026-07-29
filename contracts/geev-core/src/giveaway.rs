@@ -181,6 +181,44 @@ impl GiveawayContract {
         env.storage().persistent().set(&giveaway_key, &giveaway);
     }
 
+    /// Cancel an active giveaway before anyone has entered and return its
+    /// entire escrowed prize to the creator.
+    ///
+    /// Cancellation is deliberately unavailable after the first entry or
+    /// after winner selection. This prevents a creator from withdrawing a
+    /// prize after participants have begun relying on the campaign.
+    pub fn cancel_giveaway(env: Env, creator: Address, giveaway_id: u64) {
+        creator.require_auth();
+
+        with_reentrancy_guard(&env, || {
+            let giveaway_key = DataKey::Giveaway(giveaway_id);
+            let mut giveaway: Giveaway = env
+                .storage()
+                .persistent()
+                .get(&giveaway_key)
+                .unwrap_or_else(|| panic_with_error!(&env, Error::GiveawayNotFound));
+
+            if giveaway.creator != creator {
+                panic_with_error!(&env, Error::NotCreator);
+            }
+            if giveaway.status != GiveawayStatus::Active || giveaway.participant_count != 0 {
+                panic_with_error!(&env, Error::InvalidStatus);
+            }
+
+            // Persist the terminal state before the external token call. Soroban
+            // rolls this write back if the transfer fails.
+            giveaway.status = GiveawayStatus::Cancelled;
+            env.storage().persistent().set(&giveaway_key, &giveaway);
+
+            let token_client = token::Client::new(&env, &giveaway.token);
+            token_client.transfer(
+                &env.current_contract_address(),
+                &giveaway.creator,
+                &giveaway.amount,
+            );
+        })
+    }
+
     fn verify_participant(env: &Env, giveaway: &Giveaway, participant: &Address) {
         match giveaway.verification_type {
             1 => {

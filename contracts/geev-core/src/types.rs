@@ -50,6 +50,7 @@ pub enum GiveawayStatus {
     ResolvedRelease = 5,
     ResolvedRefund = 6,
     UnderAppeal = 7,
+    Cancelled = 8,
 }
 
 #[derive(Clone)]
