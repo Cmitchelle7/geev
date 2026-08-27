@@ -65,6 +65,8 @@ pub enum SelectionMethod {
     Random = 0,
     Manual = 1,
     Merit = 2,
+    /// Winners are the first `winner_count` entrants, in registration order.
+    FirstCome = 3,
 }
 
 #[derive(Clone)]

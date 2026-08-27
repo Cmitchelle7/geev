@@ -2221,6 +2221,400 @@ fn test_admin_can_finalize_manual_winners() {
 }
 
 #[test]
+fn test_create_giveaway_defaults_to_random_selection() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = client.create_giveaway(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "Default Random"),
+        &60,
+        &1,
+        &None,
+    );
+
+    env.as_contract(&contract_id, || {
+        let giveaway: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap();
+        assert_eq!(giveaway.selection_method, SelectionMethod::Random);
+    });
+}
+
+#[test]
+fn test_first_come_marks_winners_on_entry() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let first = Address::generate(&env);
+    let second = Address::generate(&env);
+    let third = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = client.create_giveaway_with_selection(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "First Come Mark"),
+        &60,
+        &2,
+        &None,
+        &SelectionMethod::FirstCome,
+    );
+
+    client.enter_giveaway(&first, &giveaway_id);
+    client.enter_giveaway(&second, &giveaway_id);
+    client.enter_giveaway(&third, &giveaway_id);
+
+    env.as_contract(&contract_id, || {
+        let giveaway: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap();
+        // Still Active: payout waits for finalize after end_time.
+        assert_eq!(giveaway.status, GiveawayStatus::Active);
+        assert_eq!(giveaway.winners.len(), 2);
+        assert_eq!(giveaway.winners.get(0).unwrap(), first);
+        assert_eq!(giveaway.winners.get(1).unwrap(), second);
+        assert_eq!(giveaway.participant_count, 3);
+    });
+}
+
+#[test]
+fn test_first_come_winner_selection() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let first = Address::generate(&env);
+    let second = Address::generate(&env);
+    let third = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = client.create_giveaway_with_selection(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "First Come Finalize"),
+        &60,
+        &2,
+        &None,
+        &SelectionMethod::FirstCome,
+    );
+
+    client.enter_giveaway(&first, &giveaway_id);
+    client.enter_giveaway(&second, &giveaway_id);
+    client.enter_giveaway(&third, &giveaway_id);
+
+    env.ledger().with_mut(|li| li.timestamp += 100);
+
+    let winner = client.finalize_first_come_winners(&giveaway_id);
+    assert_eq!(winner, first);
+
+    env.as_contract(&contract_id, || {
+        let giveaway: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&DataKey::Giveaway(giveaway_id))
+            .unwrap();
+        assert_eq!(giveaway.status, GiveawayStatus::Claimable);
+        assert_eq!(giveaway.winners.len(), 2);
+        assert_eq!(giveaway.winners.get(0).unwrap(), first);
+        assert_eq!(giveaway.winners.get(1).unwrap(), second);
+        assert!(giveaway.claim_deadline > 0);
+    });
+}
+
+#[test]
+fn test_first_come_finalize_emits_winner_events() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let first = Address::generate(&env);
+    let second = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = client.create_giveaway_with_selection(
+        &creator,
+        &mock_token,
+        &400,
+        &String::from_str(&env, "First Come Events"),
+        &60,
+        &2,
+        &None,
+        &SelectionMethod::FirstCome,
+    );
+
+    client.enter_giveaway(&first, &giveaway_id);
+    client.enter_giveaway(&second, &giveaway_id);
+    env.ledger().with_mut(|li| li.timestamp += 100);
+    client.finalize_first_come_winners(&giveaway_id);
+
+    let events = env.events().all();
+    let first_topics: soroban_sdk::Vec<Val> = vec![
+        &env,
+        symbol_short!("giveaway").into_val(&env),
+        symbol_short!("winner").into_val(&env),
+        first.into_val(&env),
+    ];
+    let second_topics: soroban_sdk::Vec<Val> = vec![
+        &env,
+        symbol_short!("giveaway").into_val(&env),
+        symbol_short!("winner").into_val(&env),
+        second.into_val(&env),
+    ];
+    assert!(events.iter().any(|(event_contract, topics, _)| {
+        event_contract == contract_id && topics == first_topics.into_val(&env)
+    }));
+    assert!(events.iter().any(|(event_contract, topics, _)| {
+        event_contract == contract_id && topics == second_topics.into_val(&env)
+    }));
+}
+
+#[test]
+#[should_panic]
+fn test_pick_winner_fails_on_first_come_giveaway() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let participant = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = client.create_giveaway_with_selection(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "First Come Wrong Path"),
+        &60,
+        &1,
+        &None,
+        &SelectionMethod::FirstCome,
+    );
+
+    client.enter_giveaway(&participant, &giveaway_id);
+    env.ledger().with_mut(|li| li.timestamp += 100);
+    client.pick_winner(&giveaway_id);
+}
+
+#[test]
+#[should_panic]
+fn test_first_come_finalize_fails_on_random_giveaway() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let participant = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = client.create_giveaway(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "Random Not First Come"),
+        &60,
+        &1,
+        &None,
+    );
+
+    client.enter_giveaway(&participant, &giveaway_id);
+    env.ledger().with_mut(|li| li.timestamp += 100);
+    client.finalize_first_come_winners(&giveaway_id);
+}
+
+#[test]
+#[should_panic]
+fn test_first_come_finalize_before_end_fails() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let participant = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = client.create_giveaway_with_selection(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "First Come Early"),
+        &60,
+        &1,
+        &None,
+        &SelectionMethod::FirstCome,
+    );
+
+    client.enter_giveaway(&participant, &giveaway_id);
+    client.finalize_first_come_winners(&giveaway_id);
+}
+
+#[test]
+fn test_first_come_winners_can_claim_prize() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GiveawayContract, ());
+    let client = GiveawayContractClient::new(&env, &contract_id);
+
+    let token_admin = Address::generate(&env);
+    let mock_token = env
+        .register_stellar_asset_contract_v2(token_admin.clone())
+        .address();
+    let token_client = token::Client::new(&env, &mock_token);
+    let token_admin_client = token::StellarAssetClient::new(&env, &mock_token);
+
+    let creator = Address::generate(&env);
+    let winner = Address::generate(&env);
+    let late = Address::generate(&env);
+    token_admin_client.mint(&creator, &1000);
+
+    // Default fee is 100 bps when unset; init explicitly for a known net payout.
+    client.init(&creator, &100);
+
+    env.as_contract(&contract_id, || {
+        env.storage()
+            .instance()
+            .set(&DataKey::AllowedToken(mock_token.clone()), &true);
+    });
+
+    let giveaway_id = client.create_giveaway_with_selection(
+        &creator,
+        &mock_token,
+        &500,
+        &String::from_str(&env, "First Come Claim"),
+        &60,
+        &1,
+        &None,
+        &SelectionMethod::FirstCome,
+    );
+
+    client.enter_giveaway(&winner, &giveaway_id);
+    client.enter_giveaway(&late, &giveaway_id);
+    env.ledger().with_mut(|li| li.timestamp += 100);
+    client.finalize_first_come_winners(&giveaway_id);
+
+    client.claim_prize(&giveaway_id, &winner);
+
+    // 500 gross - 1% fee = 495
+    assert_eq!(token_client.balance(&winner), 495);
+    assert_eq!(token_client.balance(&late), 0);
+}
+
+#[test]
 fn test_transfer_admin_success() {
     let env = Env::default();
     env.mock_all_auths();
