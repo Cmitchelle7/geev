@@ -42,6 +42,11 @@ export async function uploadToS3(
   mimeType: string,
   folder = "uploads",
 ): Promise<UploadResult> {
+  // FIX: Sanitize folder - only allow safe characters
+  if (!/^[a-z0-9_-]+$/.test(folder)) {
+    throw new Error("Invalid folder name");
+  }
+
   const ext = path.extname(originalName).toLowerCase();
   const key = `${folder}/${randomUUID()}${ext}`;
 
