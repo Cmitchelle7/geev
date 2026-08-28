@@ -13,7 +13,7 @@ import { randomUUID } from "crypto";
 export const runtime = "nodejs";
 
 // Whitelist of allowed storage folders - prevents path traversal
-const ALLOWED_FOLDERS = new Set(["uploads", "avatars", "posts"]);
+const ALLOWED_FOLDERS = new Set(["uploads", "avatars", "posts", "images", "videos"]);
 
 export async function POST(request: NextRequest) {
   try {
