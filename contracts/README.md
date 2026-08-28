@@ -13,11 +13,18 @@ The Geev Core contract enables decentralized giveaway creation and management wi
 
 ## Features
 
-### Winner Selection (MVP)
-- **Random Selection**: Uses `env.prng()` for pseudo-random number generation
-- **Time-based**: Can only execute after the giveaway's `end_time`
-- **Status Validation**: Only works on `Active` giveaways
-- **Participant Indexing**: Maintains `ParticipantIndex` mapping for efficient lookup
+### Winner Selection
+Selection method is stored on the giveaway at creation (`create_giveaway` defaults
+to `Random`; use `create_giveaway_with_selection` to choose explicitly):
+
+- **Random** (`pick_winner`): ledger PRNG after `end_time`
+- **FirstCome** (`finalize_first_come_winners`): first `winner_count` entrants by
+  registration order; provisional winners are marked during `enter_giveaway`
+- **Manual** (`finalize_manual_winners`): creator or admin supplies the winner list
+- **Merit** (`finalize_merit_winners`): top reputations among participants
+
+All methods share the same claim lifecycle (`claim_prize` / `recover_unclaimed_prize`)
+once status becomes `Claimable`.
 
 ## Contract Structure
 
@@ -27,102 +34,66 @@ The Geev Core contract enables decentralized giveaway creation and management wi
 // Giveaway status states
 pub enum GiveawayStatus {
     Active,      // Accepting entries
-    Claimable,   // Winner selected, prize claimable
-    Completed,   // Prize claimed
-    Cancelled,   // Giveaway cancelled
+    Claimable,   // Winners selected, prizes claimable
+    Completed,   // All prizes claimed or recovered
+    Suspended,   // Governance suspension
 }
 
 // Winner selection methods
 pub enum SelectionMethod {
-    Random,     // Random selection (current implementation)
-    FirstCome,  // First valid entries
-    Manual,     // Manual selection by creator
-}
-
-// Main giveaway structure
-pub struct Giveaway {
-    pub id: u64,
-    pub creator: Address,
-    pub title: String,
-    pub description: String,
-    pub category: String,
-    pub selection_method: SelectionMethod,
-    pub winner_count: u32,
-    pub participant_count: u32,
-    pub end_time: u64,
-    pub status: GiveawayStatus,
-    pub winner: Option<Address>,
-    pub created_at: u64,
+    Random,     // Random selection via pick_winner (default)
+    Manual,     // Creator/admin picks winners
+    Merit,      // Highest reputation participants
+    FirstCome,  // First winner_count entrants by registration order
 }
 ```
 
 ### Storage Keys
 
-- `GiveawayKey(u64)` - Store/retrieve giveaways by ID
-- `ParticipantIndexKey(u64, u32)` - Map participant index to address
-- `CounterKey` - Generate unique IDs
-- `EntryKey(u64)` - Store individual entries
+- `Giveaway(u64)` - Store/retrieve giveaways by ID
+- `ParticipantIndex(u64, u32)` - Map participant index to address
+- `GiveawayCounter` - Generate unique IDs
+- `HasEntered(u64, Address)` - Prevent double entry
+- `Claimed(u64, Address)` - Per-winner claim record
 
 ## Functions
 
-### `create_giveaway`
-Create a new giveaway with specified parameters.
+### `create_giveaway` / `create_giveaway_with_selection`
+Create a new giveaway. `create_giveaway` stores `SelectionMethod::Random`.
+`create_giveaway_with_selection` accepts an explicit `selection_method`.
 
-**Parameters:**
-- `creator: Address` - Creator's wallet address
-- `title: String` - Giveaway title
-- `description: String` - Detailed description
-- `category: String` - Giveaway category
-- `selection_method: SelectionMethod` - How winners are selected
-- `winner_count: u32` - Number of winners
-- `duration_seconds: u64` - Duration from creation time
+### `enter_giveaway`
+Add a participant to an active giveaway. For `FirstCome`, also appends the
+participant to `winners` while slots remain (provisional until finalize).
 
-**Returns:** `u64` - Unique giveaway ID
-
-### `add_participant`
-Add a participant to an active giveaway.
-
-**Parameters:**
-- `giveaway_id: u64` - ID of the giveaway
-- `participant: Address` - Participant's wallet address
-- `content: String` - Entry content/submission
-
-**Returns:** `u64` - Unique entry ID
-
-### `pick_winner` ⭐ (Main Feature)
-Select a winner randomly when the giveaway period ends.
-
-**Parameters:**
-- `giveaway_id: u64` - ID of the giveaway
+### `pick_winner`
+Select winners randomly when the giveaway period ends. Only valid when
+`selection_method == Random`.
 
 **Requirements:**
 - Giveaway must be `Active`
 - Current time must be after `end_time`
-- Must have at least one participant
+- `participant_count >= winner_count`
 
-**Process:**
-1. Validates giveaway status and timing
-2. Generates random seed using `env.prng().gen::<u64>()`
-3. Calculates winner index: `random_seed % participant_count`
-4. Retrieves winner address from `ParticipantIndex`
-5. Updates giveaway status to `Claimable`
-6. Sets winner address in giveaway struct
+**Returns:** `Address` - First winner's wallet address
 
-**Returns:** `Address` - Winner's wallet address
+### `finalize_first_come_winners`
+Lock in the first `winner_count` entrants (by `ParticipantIndex` order) after
+`end_time`. Only valid when `selection_method == FirstCome`.
+
+### `finalize_manual_winners` / `finalize_merit_winners`
+Method-specific finalize paths for `Manual` and `Merit` giveaways (creator or admin).
 
 ### `claim_prize`
-Allow winner to claim their prize.
-
-**Parameters:**
-- `giveaway_id: u64` - ID of the giveaway
-- `claimer: Address` - Claimer's wallet address
+Allow a selected winner to claim their prize share while the giveaway is
+`Claimable` and before `claim_deadline`.
 
 **Requirements:**
 - Giveaway status must be `Claimable`
-- Claimer must be the selected winner
+- Claimer must be a selected winner who has not already claimed
+- Claim window must not have expired
 
-**Returns:** `bool` - Success status
-
+**Returns:** (void — transfers net prize after fee)
 ### `get_giveaway`
 Retrieve giveaway details by ID.
 

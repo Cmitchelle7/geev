@@ -254,6 +254,11 @@ Giveaway {
   updatedAt: timestamp  
 }
 
+> **On-chain note:** Soroban `SelectionMethod` also includes `Manual` and `Merit`.
+> For `first_come`, entrants are provisionally marked as winners while slots remain;
+> `finalize_first_come_winners` after `end_time` locks the first `winner_count`
+> registrations and opens the shared claim lifecycle.
+
 ---
 
 ### **4.3 ENTRY & CONTRIBUTION SYSTEM**

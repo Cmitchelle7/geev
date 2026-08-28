@@ -178,6 +178,15 @@ impl GiveawayContract {
         env.storage().persistent().set(&index_key, &participant);
 
         giveaway.participant_count += 1;
+
+        // First-come: provisionally mark the entrant as a winner while slots remain.
+        // Status stays Active until `finalize_first_come_winners` after end_time.
+        if giveaway.selection_method == SelectionMethod::FirstCome
+            && giveaway.winners.len() < giveaway.winner_count
+        {
+            giveaway.winners.push_back(participant.clone());
+        }
+
         env.storage().persistent().set(&giveaway_key, &giveaway);
     }
 
@@ -654,6 +663,44 @@ impl GiveawayContract {
         winners
             .first()
             .unwrap_or_else(|| panic_with_error!(env, Error::NoParticipants))
+    }
+
+    /// Finalize a first-come giveaway after `end_time`.
+    ///
+    /// Winners are the first `winner_count` participants in registration order
+    /// (`ParticipantIndex` 0..winner_count-1). Entrants beyond that count remain
+    /// participants but are not winners. Payout uses the shared claim lifecycle.
+    pub fn finalize_first_come_winners(env: Env, giveaway_id: u64) -> Address {
+        let giveaway_key = DataKey::Giveaway(giveaway_id);
+        let giveaway: Giveaway = env
+            .storage()
+            .persistent()
+            .get(&giveaway_key)
+            .unwrap_or_else(|| panic_with_error!(&env, Error::GiveawayNotFound));
+
+        if giveaway.selection_method != SelectionMethod::FirstCome {
+            panic_with_error!(&env, Error::InvalidStatus);
+        }
+
+        Self::ensure_ready_for_selection(&env, &giveaway);
+
+        let winners = Self::select_first_come_winners(&env, giveaway_id, giveaway.winner_count);
+        Self::finalize_winners(&env, &giveaway_key, giveaway, winners)
+    }
+
+    /// Select winners as the first `winner_count` entrants by registration index.
+    fn select_first_come_winners(env: &Env, giveaway_id: u64, winner_count: u32) -> Vec<Address> {
+        let mut winners = Vec::new(env);
+        for i in 0..winner_count {
+            let participant_key = DataKey::ParticipantIndex(giveaway_id, i);
+            let winner: Address = env
+                .storage()
+                .persistent()
+                .get(&participant_key)
+                .unwrap_or_else(|| panic_with_error!(env, Error::InvalidIndex));
+            winners.push_back(winner);
+        }
+        winners
     }
 
     /// Finalize a giveaway with manually selected winners
