@@ -12,6 +12,9 @@ import { randomUUID } from "crypto";
 
 export const runtime = "nodejs";
 
+// Whitelist of allowed storage folders - prevents path traversal
+const ALLOWED_FOLDERS = new Set(["uploads", "avatars", "posts", "images", "videos"]);
+
 export async function POST(request: NextRequest) {
   try {
     const currentUser = await getCurrentUser(request);
@@ -28,6 +31,11 @@ export async function POST(request: NextRequest) {
     if (!(file instanceof File)) return apiError("No file provided", 400);
 
     const folder = (formData.get("folder") as string | null) ?? "uploads";
+
+    // FIX: Sanitize folder to prevent path traversal
+    if (!ALLOWED_FOLDERS.has(folder)) {
+      return apiError("Invalid folder", 400);
+    }
 
     // Enhanced validation: type, size, and magic byte verification
     const validationError = await validateFileWithContent(file);
