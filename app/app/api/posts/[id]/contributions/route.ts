@@ -67,7 +67,6 @@ export async function POST(
         tx
       );
 
-      // Award the creator for receiving a contribution
       await awardXp(
         post.userId,
         XP_REWARDS.receiveContribution,
@@ -76,14 +75,13 @@ export async function POST(
         tx
       );
 
-      // Optional: notification to creator
       if (post.userId !== currentUser.id && tx.notification?.create) {
         try {
           await tx.notification.create({
             data: {
               userId: post.userId,
               type: 'help_contribution',
-              message: `${isAnonymous ? 'Someone' : currentUser.name} contributed to your help request`,
+              message: `${isAnonymous ? 'Someone' : currentUser.name} contributed to yourhelp request`,
               link: `/post/${postId}`,
             }
           });
@@ -93,18 +91,26 @@ export async function POST(
       return created;
     });
 
-    // Check badges
     checkAndAwardBadges(currentUser.id).catch(console.error);
 
-    // Calculate updated progress
     const aggregate = await prisma.helpContribution.aggregate({
       where: { postId },
       _sum: { amount: true }
     });
     const totalRaised = aggregate._sum.amount || 0;
 
+    // FIX: Mask anonymous contribution in POST response
+    let maskedContribution = contribution;
+    if (contribution.isAnonymous) {
+      const { user, userId, ...rest } = contribution;
+      maskedContribution = {
+        ...rest,
+        user: { id: 'anonymous', name: 'Anonymous', avatarUrl: null, rank: null }
+      } as any;
+    }
+
     return apiSuccess({
-      contribution,
+      contribution: maskedContribution,
       progress: {
         totalRaised,
         targetAmount: post.targetAmount,
@@ -149,11 +155,18 @@ export async function GET(
     });
     const totalRaised = aggregate._sum.amount || 0;
 
+    // FIX: Strip userId and mask user for anonymous contributions
     return apiSuccess({
-      contributions: contributions.map(c => ({
-        ...c,
-        user: c.isAnonymous ? { id: 'anonymous', name: 'Anonymous', avatarUrl: null, rank: null } : c.user
-      })),
+      contributions: contributions.map(c => {
+        if (c.isAnonymous) {
+          const { user, userId, ...rest } = c;
+          return {
+            ...rest,
+            user: { id: 'anonymous', name: 'Anonymous', avatarUrl: null, rank: null }
+          };
+        }
+        return c;
+      }),
       totalRaised
     });
   } catch (error) {

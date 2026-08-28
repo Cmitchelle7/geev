@@ -84,7 +84,22 @@ const GET = async (
 
         const currentAmount = post.contributions?.reduce((sum, c) => sum + c.amount, 0) || 0;
 
-        return apiSuccess({ ...post, currentAmount });
+        // FIX: Mask anonymous contributions - remove user relation and userId
+        const maskedPost = {
+            ...post,
+            contributions: post.contributions?.map(c => {
+                if (c.isAnonymous) {
+                    const { user, userId, ...rest } = c;
+                    return {
+                        ...rest,
+                        user: { id: 'anonymous', name: 'Anonymous', avatarUrl: null, username: 'Anonymous' }
+                    };
+                }
+                return c;
+            })
+        };
+
+        return apiSuccess({ ...maskedPost, currentAmount });
     } catch (error) {
         return apiError('Failed to fetch post', 500);
     }
@@ -124,7 +139,7 @@ const PATCH = async (
             return apiError('Forbidden', 403);
         }
 
-        const isOnlyStatusUpdate = body.status !== undefined && Object.keys(body).every(k => k === 'status');
+        const isOnlyStatusUpdate = body.status !== undefined && Object.keys(body).every(k=> k === 'status');
 
         if (post._count.entries > 0 && !isOnlyStatusUpdate) {
             return apiError('Cannot edit post details with entries', 400);
